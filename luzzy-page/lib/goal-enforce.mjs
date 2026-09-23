@@ -373,6 +373,14 @@ function counterFor(sessionId) {
       chainJudgements: 0,
       chainBlocks: 0,
       skillBlocks: 0,
+      /**
+       * 已经把哪几条待确认提案推进对话里了（P-nnn）。
+       *
+       * 这是**运行时事实**，和 `chainPending` 同一类，所以存在内存里而不是交付状态里：
+       * 它回答的是「这一轮我提醒过没有」，不是「用户确认过没有」——后者是 `proposals`
+       * 里那条记录的 `pending`，那才是持久状态。
+       */
+      proposalsSurfacedIds: [],
     }
     counters.set(sessionId, entry)
   }
@@ -728,6 +736,44 @@ export function renderChainGateRefusal(toolName, entry) {
 }
 
 /**
+ * 待确认提案：把它从「躺在页面上等人去看」推到对话里。
+ *
+ * 用户的原话是，提案现在是「静默且异步地展示在控制台内」—— 它躺在目标中心等，用户不主动
+ * 去看就永远不知道有人在等他拍板。这条提醒要做的是把那个「等」换成一次**当场要答案**。
+ *
+ * 为什么由宿主发，而不是在 propose 的工具描述里加一句「请记得问用户」：`propose` 那几条
+ * 的描述已经那么写了，但描述是 guidance；这里的注入是在**检测到一件已经发生的事实**
+ * （交付状态里真的躺着一条 pending 提案）之后说的。前者可以被忽略，后者不行（§67）。
+ *
+ * 只说一次（`entry.proposalsSurfacedIds`）：每个 step 重说一遍，这句提醒就变成了背景噪音，
+ * 而它的全部价值就在于「它跳出来了」这件事。页面上那排按钮保留着当兜底 —— 模型万一没问，
+ * 用户还有地方点。
+ *
+ * @param {Array<object>} rows - 待确认的提案行（原始交付状态里那几条）。
+ * @returns {string} the notice block.
+ */
+export function renderProposalAsk(rows) {
+  const lines = [
+    '<proposal_ask>',
+    `有 ${rows.length} 条变更提案在等你拍板 —— **现在就问，别等**：`,
+    '',
+  ]
+  for (const row of rows) {
+    const target = row.target === undefined || row.target === '' ? '' : ` · ${row.target}`
+    lines.push(`- ${row.id}｜字段 ${row.field}${target}`)
+    lines.push(`  拟改为：${row.proposed}`)
+    if (row.current !== undefined && row.current !== '') lines.push(`  当前：${row.current}`)
+    if (row.reason !== undefined && row.reason !== '') lines.push(`  原因：${row.reason}`)
+  }
+  lines.push('')
+  lines.push('用 `ask_user_question` 把它交给用户选（它的选项会渲染成按钮，点一下就是答案）。')
+  lines.push('拿到答案后**立刻**用 `goal_delivery` 的 `adoptProposal` / `rejectProposal` 落下去 ——')
+  lines.push('用户答了而状态没变，等于没问。')
+  lines.push('</proposal_ask>')
+  return lines.join('\n')
+}
+
+/**
  * 技能清单的门：这一轮命中技能清单，但一条激活记录都没有。
  *
  * 单独一条拒绝文案的理由同 `renderIncompleteGoalRefusal`：**「你答了命中但什么都没登记」**和
@@ -1057,6 +1103,22 @@ export function installEnforcement(ctx, deps) {
         if (summary !== '状态链') summary = changed ? '目标已更新' : '目标状态'
       }
       if (nudge !== null) parts.push(nudge)
+
+      // ---- 待确认提案：推到对话里，而不是躺在页面上等 ------------------------
+      //
+      // 这里**不需要额外的读取触发**：提案是 `propose*` 写的，而任何一次交付状态写入都会
+      // 让 revision 变，于是下一步 `changed` 就为真、`goalDue` 就已经把 delivery 读进来了。
+      // 换句话说，代理提完的**下一步**就会看到这一块。
+      if (delivery !== null && Array.isArray(delivery.proposals)) {
+        const pending = delivery.proposals.filter((row) => row.pending === true)
+        const fresh = pending.filter((row) => entry.proposalsSurfacedIds.indexOf(row.id) === -1)
+        if (fresh.length > 0) {
+          for (const row of fresh) entry.proposalsSurfacedIds.push(row.id)
+          parts.push(renderProposalAsk(fresh))
+          if (summary === '没有目标') summary = '待确认提案'
+        }
+      }
+
       if (parts.length === 0) return decision
       const notice = pluginNotice(parts.join('\n\n'), summary)
       // WHERE the notice goes, and why it is not the tail.

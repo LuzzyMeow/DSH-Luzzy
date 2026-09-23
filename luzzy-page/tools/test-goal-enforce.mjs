@@ -1480,6 +1480,22 @@ try {
       { at: Date.now() }).delivery)
     eq('the activation fixture landed', written.ok, true)
     eq('and then the work tool passes', (await attempt()).kind, 'allow')
+
+    // ---- 待确认提案：宿主把它推进对话（用户第 5 件的宿主那一半）-------------
+    //
+    // 「静默且异步地展示在控制台内」的反面就是这段文本：宿主**检测到一件已经发生的事实**
+    // （交付状态里真躺着一条 pending 提案），然后要求模型当场用 ask_user_question 把选项
+    // 渲染出来。它和工具描述里那句「请记得问用户」的区别就在这里 —— 那是 guidance，
+    // 这条是在事实之后说的。
+    const ask = enforce.renderProposalAsk([
+      { id: 'P-001', field: 'scope', target: '', proposed: '1 项包含 / 1 项排除', current: '（未填写）', reason: '接口已存在' },
+    ])
+    check('the proposal ask names the proposal', ask.includes('P-001'))
+    check('and states what it would become', ask.includes('1 项包含 / 1 项排除'))
+    check('and points at the tool that turns it into buttons', ask.includes('ask_user_question'))
+    check('and tells the model to write the answer back',
+      ask.includes('adoptProposal') && ask.includes('rejectProposal'))
+    check('and says an answer that changes nothing is not an answer', ask.includes('等于没问'))
   }
   {
     // 读不出交付状态时，链门仍然持有工具：「我读不出来」不等于「模型答过了」。

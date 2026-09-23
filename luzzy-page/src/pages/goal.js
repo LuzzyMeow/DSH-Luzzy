@@ -353,9 +353,18 @@
         '</div>'
     }).join('')
     return LZ.Card.card({
+      id: 'goalProposals',
       title: '变更提案',
       count: pending.length + ' 项待确认',
-      sub: 'Agent 不能自己改目标、范围、约束和必须满足的验收标准——它只能提出来，由你决定。',
+      // 这一句是这次改动里最要紧的：**主通道换了**。
+      //
+      // 用户的原话是「静默且异步地展示在控制台内」—— 提案躺在这里等，他不主动翻就永远
+      // 不知道有人在等他拍板。现在 Agent 会在对话里就地问（宿主一旦检测到 pending 提案，
+      // 就会要求它调 ask_user_question，而那个工具的选项会渲染成按钮），这里降级成兜底。
+      //
+      // 兜底**不删**：模型可能没问、用户可能划过去了。删掉它等于把「采纳」这条人类权威
+      // 通道挂在一个可能不发生的动作上 —— 而 §65 说采纳是人类独有的权力，那它就不该有单点。
+      sub: 'Agent 会在对话里就地问你（主通道）。这一份是兜底：万一它没问，或你翻过去了，直接在这里点。',
       body: body,
     })
   }
@@ -459,7 +468,7 @@
 
     return '<div class="driftLine" data-chain="' + (chain.judged ? 'judged' : 'pending') + '">' +
       svg +
-      '<p class="rowSub" style="margin:6px 0 0">' +
+      '<p class="rowSub" style="margin:var(--lz-space-xxs) 0 0">' +
       (chain.at === '' ? '本轮还没判断' : '判断于 ' + esc(chain.at)) +
       '</p>' +
       '</div>'
