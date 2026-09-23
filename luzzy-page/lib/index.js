@@ -30,6 +30,7 @@ import { fileURLToPath } from 'node:url'
 import { createUsageAggregator } from './usage-aggregate.mjs'
 import { registerPresetRoutes } from './preset-routes.mjs'
 import { registerGoalRoutes } from './goal-routes.mjs'
+import { registerRuntimeRoutes } from './runtime-routes.mjs'
 import { registerDeliveryTool } from './goal-tools.mjs'
 import { installEnforcement, readPair, commitOp, service } from './goal-enforce.mjs'
 import { ARTIFACT_RELATIVE_PATH, readArtifactFlags, storePaths } from './goal-store.mjs'
@@ -37,6 +38,21 @@ import * as goalDomain from './goal-domain.mjs'
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const UNITS = new Set(['hour', 'day', 'week', 'month'])
+
+/**
+ * The plugin's own version, read from package.json.
+ *
+ * Read from the file rather than hard-coded so it cannot drift from what is actually
+ * installed — the 「系统信息」 page reports it, and a version string that lies is worse than
+ * no version string. A read failure degrades to `unknown`, not to a plausible-looking guess.
+ */
+const PLUGIN_VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(join(PLUGIN_ROOT, 'package.json'), 'utf8')).version ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
+})()
 
 /** DSH home resolution, mirroring @deepseek-ai/dsh-home-paths: $DSH_HOME wins, then ~/.dsh. */
 function resolveDshHome() {
@@ -291,6 +307,20 @@ export function apply(ctx) {
   // The 「预设」 sub-page's routes. Registered last and in their own module so this file's
   // existing paths stay untouched; the handler itself decides GET versus POST.
   registerPresetRoutes(ctx)
+
+  // The 「执行状态」 / 「系统信息」 pages' read-only route.
+  //
+  // Separate from the goal route on purpose: the goal route is a WRITE surface with a
+  // compare-and-set policy, and its contract is "one mutation, then the whole state back".
+  // Runtime facts are raw log events — cheaper, safe to poll, and with no write path at all,
+  // so they get their own route rather than a second read path behind a write endpoint.
+  //
+  // This reads the session logs the same way the usage aggregator does (read-only; an
+  // unreadable log is reported, never guessed at). It does NOT write anything.
+  registerRuntimeRoutes(ctx, {
+    home,
+    pluginVersion: PLUGIN_VERSION,
+  })
 
   // The 「目标」 sub-page: its route, its tool, and its two lifecycle hooks.
   //
