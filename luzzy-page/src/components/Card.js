@@ -38,8 +38,10 @@
         (spec.actions === undefined ? '' : spec.actions) +
         '</div>'
     const sub = spec.sub === undefined ? '' : '<p class="cardSub">' + esc(spec.sub) + '</p>'
+    // 正文裹一层 `.cardBody`：这一层是**滚动面**。卡片本体是等高的格子（高度由外层的网格给），
+    // 抬头与副标题固定，只有正文滚 —— 所以一张「执行证据」卡片里有 37 条也撑不高它自己。
     return '<section class="card"' + (spec.id ? ' id="' + esc(spec.id) + '"' : '') + '>' +
-      head + sub + spec.body + '</section>'
+      head + sub + '<div class="cardBody">' + spec.body + '</div></section>'
   }
 
   /**

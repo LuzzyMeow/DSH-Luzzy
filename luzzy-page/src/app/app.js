@@ -280,6 +280,39 @@
     return '<div class="staleBar" role="status">正在读取控制台的最新数据… 下面这份是上一次的快照。</div>'
   }
 
+  /**
+   * 把散落的卡片收进一个填充网格。
+   *
+   * WHY THIS EXISTS AT ALL
+   *
+   * 要求是「一页就是窗口这么大，不滚动不翻页，等高小卡片，卡片内部可滚」。等高这一半，
+   * 靠在**卡片**上写 `flex: 1 1 0` 就够了（bases 都是 0、增长系数一样 → 高度一样）。
+   * 出问题的是另一半：列的直接子项并不都是卡片。探针量到的概览是
+   *
+   *     btnBar  card  card  driftLine  driftLine  card  card
+   *
+   * —— 分区导航和两行状态提示各自占一档，四张卡只剩 97px，正文可见 17px。等高成立，但没人
+   * 读得了。而「一列里每一项都平分高度」正是为什么要给卡片**排成网格**：并排之后，同样多的
+   * 高度分给更少的行。
+   *
+   * 为什么在 DOM 里做，而不是在 CSS 里：网格没法「这一项按内容算，那一项按 1fr 算」——行高属于
+   * 整行，不属于格子；而 `align-content: stretch` 会把导航那一行也一起拉高，白白吃掉三份。
+   * 页面模块是一串扁平字符串，它们不该知道自己的卡片会被排成几列；**排版是外壳的事**。
+   *
+   * 位置：插在**第一张卡原来的地方**。导航与单行提示的相对顺序不变，只是落在网格之后——
+   * 它们本来就是状态说明，不是卡片之间的分隔物。
+   */
+  function packCards() {
+    if (content === null) return
+    const cards = []
+    for (const node of content.children) if (node.classList.contains('card')) cards.push(node)
+    if (cards.length < 2) return
+    const grid = document.createElement('div')
+    grid.className = 'cardGrid'
+    cards[0].before(grid)
+    for (const card of cards) grid.append(card)
+  }
+
   function render() {
     if (tabbar !== null) tabbar.innerHTML = LZ.Router.tabBar(state.tab)
     if (content === null) return
@@ -307,6 +340,7 @@
     // first. `undefined` therefore means "already painted" — assigning it would put the literal
     // string "undefined" on the page, which is exactly what happened before this guard existed.
     if (html !== undefined) content.innerHTML = staleBanner() + html
+    packCards()
 
     // Chart interaction is attached after the markup exists (it is built as a string).
     // The animation attribute is retired by a timer — NOT animationend, because under

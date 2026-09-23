@@ -155,16 +155,22 @@
 
     return LZ.Card.card({
       title: '目标概览',
-      body: head + summary + expected + meta + blocked +
-        LZ.Card.btnBar([
-          { label: '刷新', id: 'goalRefresh' },
-          { spacer: true },
-          // Markdown 视窗的入口。放在概览卡上而不是页面底部，是因为它回答的正是这张卡
-          // 的问题（「我要完成什么」），而「完整」两个字是它唯一的卖点：卡片里是摘要，
-          // 视窗里是全部十三节。
-          { label: '完整计划', attrs: 'data-viewer="plan" data-viewer-title="完整目标与计划"' },
-          { label: '查看 goal.md', id: 'goalRawToggle', attrs: 'aria-expanded="' + String(LZ.App.isRawOpen()) + '"' },
-        ]),
+      // 这三个动作搬到了**抬头**。
+      //
+      // 它们原来是正文的最后一行。正文现在是一个可滚动的面（卡片等高之后必然如此），而
+      // 「完整计划」是这张卡的主入口 —— 一个要滚到底才看得见的入口，等于没有入口。
+      // 这不是推测，是真鼠标点出来的：`test-goal-live-frame` 用
+      // `Input.dispatchMouseEvent` 点 `[data-viewer="plan"]`，视窗没打开，因为那个坐标上
+      // 现在盖着卡片本身（命中测试落到卡片，不是按钮）。
+      //
+      // 顺带把那个 `{ spacer: true }` 去掉了：抬头本来就有自己的 `.spacer`，再来一个会把
+      // 按钮推到中间。动作属于抬头，正文属于内容。
+      actions: LZ.Card.btnBar([
+        { label: '刷新', id: 'goalRefresh' },
+        { label: '完整计划', attrs: 'data-viewer="plan" data-viewer-title="完整目标与计划"' },
+        { label: '查看 goal.md', id: 'goalRawToggle', attrs: 'aria-expanded="' + String(LZ.App.isRawOpen()) + '"' },
+      ]),
+      body: head + summary + expected + meta + blocked,
     })
   }
 

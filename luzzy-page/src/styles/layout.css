@@ -68,26 +68,75 @@ body::before {
   height: 100%;
 }
 
+/* 页面**不滚**。滚动被下移到每一张卡片自己的 `.cardBody` 里。
+ *
+ * 用户的原话：「这些组件都很长，需要在页面内滚动查看才能看完，能不能做成永远只有用户页面
+ * 大小，就是实时监测用户打开DSH desktop的窗口大小，我们就这么大 不滚动不翻页」。
+ *
+ * 这一层因此只负责两件事：**把可用高度量出来**（它是 `.main` 的弹性子项，高度就是窗口减掉
+ * 侧栏与提示条），然后把这块高度**原封不动传给网格**。`overflow: hidden` 不是防御性写法，
+ * 它就是「不滚」这个要求本身；少了它，内容一多就会从这里再长出一条页面滚动条。
+ *
+ * 窄屏（见文件末尾的媒体查询）会退回整页滚动：把等高网格压到 375px 上，每张卡都只剩几行高，
+ * 那不叫「不翻页」，那叫读不了。 */
 .scroll {
   flex: 1 1 auto;
-  overflow-y: auto;
-  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
   padding: var(--lz-page-pad) var(--lz-page-pad) var(--lz-space-xl);
 }
 
-/* 内容列：居中、有上限宽度。
+/* 内容列：居中、有上限宽度，**卡片平分剩余高度**。
  *
  * 上限不是照抄聊天区的 748px——那是聊天内容的行宽，放在整栏视图里等于右侧大片留白。
  * 1100px 是「一栏能放两张卡片、一张卡片不至于宽到读不了」的量。
- * 设计系统要求主内容居中、留白随断点增长，所以窄屏时内边距收窄而不是列收窄。 */
+ * 设计系统要求主内容居中、留白随断点增长，所以窄屏时内边距收窄而不是列收窄。
+ *
+ * HOW 等高, AND WHY NOT A GRID
+ *
+ * 等高要的是「剩下的高度平分给卡片」。第一版用 `grid-auto-rows: minmax(0, 1fr)`，量出来是
+ * 对的 —— 每张卡 93px，行与行小数点后只差 0.02px。但那 93px 是**7 个格子分 744px** 的结果，
+ * 而列的直接子项并不都是卡片：探针量到的是
+ *
+ *     div.btnBar  section.card  section.card  div.driftLine  div.driftLine  section.card  section.card
+ *
+ * —— 分区导航与两行状态提示被当成格子，各自吃掉一份，于是四张卡只剩 93px，正文可见 12px。
+ * 网格没法「这一个子项按内容算，那一个按 1fr 算」：行高属于整行，不属于格子。
+ *
+ * 换成 flex 之后这件事是自然表达的：`flex: 1 1 0` 的项平分剩余空间（basis 都是 0，增长系数
+ * 相同 → 高度相同），其余项按内容高。所以下面只给**卡片**（和装着卡片的 `.grid`）那一档。 */
 .column {
+  flex: 1 1 auto;
+  min-height: 0;
   width: 100%;
   max-width: var(--lz-column-max);
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: var(--lz-space-base);
+  /* 兜底，不是主路径：卡片的收缩 + 内部滚动已经处理了「内容比格子长」，这一条处理的是
+   * 「**格子本身**装不下」——比如导航加状态行就把高度吃光。那时宁可出现一条滚动条，
+   * 也不要 `hidden` 把内容安静地裁掉：裁掉的内容没有任何地方会报错，用户只看到「少了一段」。
+   * 实测（tools/probe-card-grid.mjs）正常内容下 scrollHeight == clientHeight，不出现滚动条。 */
+  overflow-y: auto;
+  overflow-x: hidden;
 }
+
+/* 等高就这一行：basis 0 + 相同的增长系数 = 平分，不看内容多少。
+ * `.grid` 也算一档，因为「一栏两张卡」的那一行同样该占一份高度，否则整页只有一张网格时
+ * 卡片会退回内容高。 */
+.column > .card,
+.column > .grid,
+.cardGrid { flex: 1 1 0; min-height: 0; }
+
+/* 非卡片块（分区导航、同步状态行）**不参与平分，也不许被压缩**。
+ *
+ * 第一版给所有子项写了 `min-height: 0`，于是这些块可以被压到比内容矮 —— 它们的
+ * `overflow` 是 visible，被压掉的部分会直接跑到容器外面被裁掉：一句状态说明凭空少半句，
+ * 没有任何地方报错。能安全收缩的只有**自己有滚动面**的东西，也就是卡片。 */
+.column > :not(.card):not(.grid):not(.cardGrid) { flex: 0 0 auto; }
 
 /* ---------------------------------------------------------------- 侧边栏
  *
@@ -190,15 +239,53 @@ button:focus-visible,
 /* ---------------------------------------------------------------- 分栏栅格
  *
  * 两列在宽屏并排、窄屏折成一列。用 auto-fit + minmax 而不是媒体查询：
- * 折点由「卡片最小可读宽度」决定，而不是由设备名决定。 */
+ * 折点由「卡片最小可读宽度」决定，而不是由设备名决定。
+ *
+ * `grid-auto-rows: minmax(0, 1fr)` 让同一行里的两张卡**彼此等高**（`.grid` 自己是这一档的
+ * flex 项，高度由 `.column` 给，行再平分它）。没有那个 `0`，行会被内容撑开，两张卡又变得
+ * 不一样高 —— 而「等高」是这一整轮要求的原话。 */
 .grid {
   display: grid;
   gap: var(--lz-space-base);
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
 }
 
 .grid[data-cols='2'] { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
 .grid[data-cols='3'] { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+/* 卡片网格：外壳把一页的卡片收进这里（见 app.js 的 packCards）。
+ *
+ * 存在的理由只有一条：**并排之后，同样多的高度分给更少的行**。四张卡排一列时，700px 的可
+ * 用高度每张分到 97px —— 等高是成立的，但正文只露出 17px。排成两行，每张就有 ~330px。
+ *
+ * 行仍然是 `minmax(0, 1fr)`：同一行里的卡片互相等高，且允许收缩到比内容矮（那个 0 就是
+ * 「可以收缩」），收缩出来的部分由卡片自己的 `.cardBody` 滚。列宽用 auto-fit + minmax，
+ * 和上面的 `.grid` 同一个判据 —— 折点由「卡片最小可读宽度」决定，不由设备名决定。 */
+.cardGrid {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: var(--lz-space-base);
+}
+
+.cardGrid > .card { min-height: 0; }
+
+/* 状态行也要有上限，理由和卡片一样：一页就只有这么大。
+ *
+ * 它自己想说的确实只有一句话（见 components.css 里那条注释），但文案长了会折成五行 ——
+ * 探针实测两条加起来 232px，占掉 744px 视口的 31%，而卡片因此只剩 210px。它承载的是**状态**，
+ * 不是内容，不该按内容的体积去占版面。
+ *
+ * 给上限 + 自己滚，和卡片同一条规则；而不是截断加省略号 —— 截断会把「为什么不一致」这类
+ * 唯一说清问题的那半句藏起来，而它正是这一行存在的理由。 */
+.column > .driftLine {
+  flex: 0 1 auto;
+  max-height: 3.6em;
+  overflow-y: auto;
+}
 
 /* 并排时每列自己纵向堆叠，卡片之间保持同样间隙 */
 .grid > .stack {
@@ -306,6 +393,26 @@ button:focus-visible,
   .tabs { flex-direction: row; flex-wrap: nowrap; }
   .navItem { width: auto; flex: 0 0 auto; }
   .navLabel { display: none; }
+
+  /* 窄屏退回整页滚动。
+   *
+   * 等高卡片的前提是「高度够分」。窄屏（而且侧栏此时还占着一条）时再切成几张小等高卡，
+   * 每张只剩几行 —— 那不叫「不翻页」，那叫读不了。所以这里把两层滚动换回来：
+   * 页面滚，卡片按内容高、自己不滚。
+   *
+   * 这是**明确改写**上面那条「不滚」与「平分」，不是靠某处没写：一个只改一件事的断点，
+   * 比一处隐式的「反正窄屏时它会变」可靠。 */
+  .scroll { overflow-y: auto; overflow-x: hidden; display: block; }
+  .column { overflow: visible; }
+  .column > .card,
+  .column > .grid,
+  .cardGrid { flex: 0 0 auto; }
+  .column > * { min-height: auto; }
+  /* 卡片网格在窄屏不再并排，回到一列、按内容高 —— 320px 的卡片在 375px 屏上放不下两列，
+   * 而自动折成一列之后如果还按 1fr 分行，行数一变高度就又不可控了。 */
+  .cardGrid { display: flex; flex-direction: column; }
+  .card { display: block; overflow: visible; }
+  .cardBody { overflow: visible; }
 }
 
 @media (max-width: 720px) {

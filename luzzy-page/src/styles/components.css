@@ -28,6 +28,40 @@
   box-shadow: var(--lz-shadow-glass);
   padding: var(--lz-space-base) var(--lz-space-md);
   min-width: 0;
+  /* 卡片是**一个等高格子**，高度由外面那层网格给，内容长了在卡片内部滚。 */
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 卡片自己滚，页面不滚。
+ *
+ * 用户的原话：「你展示的这些组件都很长，需要在页面内滚动查看才能看完，能不能做成永远只有
+ * 用户页面大小…不滚动不翻页…把这些模块化卡片式设计真的做成一个个卡片，等高，小卡片，
+ * 在卡片内部可滚动查看」。
+ *
+ * 于是滚动被拆成两层，各管各的：外层给**等高**，这里给**能读完**。
+ *
+ * `min-height: 0` 不是可选的：flex 子项的默认值是 auto，少了它这一层只撑高、不收缩，
+ * 滚动就会跑回外层 `.scroll` 上去 —— 页面看起来「又变成整页滚了」，而卡片其实什么都没坏。
+ * 同一个坑在本文件的 `.dialogContent` 上踩过一次。 */
+.cardBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 细滚动条。默认那种粗条出现在每一张等高小卡片里，会把卡片切得像坏了 ——
+   * 而它出现的频率正是这个设计的结果，不是偶发。 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--lz-border) transparent;
+}
+
+.cardBody::-webkit-scrollbar { width: 8px; }
+.cardBody::-webkit-scrollbar-track { background: transparent; }
+.cardBody::-webkit-scrollbar-thumb {
+  border-radius: var(--lz-radius-pill);
+  background: var(--lz-border);
 }
 
 /* 不支持 backdrop-filter 时退回实底。
