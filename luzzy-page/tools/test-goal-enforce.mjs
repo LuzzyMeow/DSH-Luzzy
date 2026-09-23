@@ -314,6 +314,62 @@ try {
     enforce.resetCounters()
   }
   {
+    // WHERE the notice lands, not just that it exists.
+    //
+    // The block used to be appended to the tail. The core's own context injector
+    // (`dsh-agent-instructions`) inserts AFTER THE LAST CLAIMED MESSAGE instead, so the
+    // orientation reads as context for *this* user message and anything the loop appended
+    // afterwards keeps its place. Every other assertion in this file fires with empty
+    // `messages` arrays, so position was simply untested — the change could have been a no-op
+    // or a tail append and everything else would still pass.
+    const paths = freshPaths()
+    const sessionId = 'sess-preflight-position'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+
+    // A turn where the loop has ALREADY appended something after the claimed user message.
+    // This is the shape the core's findLastIndex logic exists to handle.
+    const claimed = { role: 'user', content: '把这个项目改造成……', id: 'claimed-1' }
+    const appendedByLoop = { role: 'user', content: '（循环自己追加的）', id: 'appended-1' }
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), messages: [claimed], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [claimed, appendedByLoop] })
+
+    eq('the step enters', decision.kind, 'enter')
+    eq('three messages now (claimed + injected + appended)', decision.messages.length, 3)
+    // The decisive assertion: the notice is index 1 — right after the claimed message — and the
+    // loop's own message moved to the end.
+    eq('the notice sits directly after the claimed message',
+      decision.messages[1]?.content?.[0]?.text?.slice(0, 12), '<goal_state>')
+    eq('the loop\'s own message keeps its content', decision.messages[2]?.id, 'appended-1')
+    eq('and the claimed message is untouched at the front', decision.messages[0]?.id, 'claimed-1')
+    // Negative control inside the same test: a tail append would put the notice at index 2.
+    check('it is NOT at the tail', decision.messages[2]?.content?.[0]?.text !== undefined
+      ? !String(decision.messages[2].content[0].text).startsWith('<goal_state>')
+      : true, JSON.stringify(decision.messages.map((m) => m.id ?? 'notice')))
+    enforce.resetCounters()
+  }
+  {
+    // A synthetic turn with nothing claimed must still get the notice — degraded to the tail
+    // rather than dropped. An orientation that never arrives is worse than a late one.
+    const paths = freshPaths()
+    const sessionId = 'sess-preflight-noclaim'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+
+    eq('a turn with nothing claimed still gets the notice', decision.messages.length, 1)
+    check('and it is the goal block', decision.messages[0].content[0].text.startsWith('<goal_state>'))
+    enforce.resetCounters()
+  }
+  {
     // §13: a trivial turn still READS. There is no "skip because nothing happened" branch —
     // the control is the step interval, not a judgement about the user's request.
     const paths = freshPaths()

@@ -1,0 +1,1408 @@
+/* ============================================================ Luzzy 控制台 · 组件样式
+ *
+ * 只管「东西长什么样」。取值一律来自 tokens.css，这里不出现新的颜色、字号、间距或圆角。
+ *
+ * 组件清单：Card / StatusBadge / Progress / Timeline / TreeView / EmptyState
+ *          + 按钮、区块、键值行、对话框、Markdown、图表（既有部件沿用）
+ */
+
+/* ---------------------------------------------------------------- Card
+ *
+ * 一张卡片 = 一个可独立阅读的单元。层级靠描边做出来，阴影只给真的浮起来的东西——
+ * 所以卡片默认无阴影，只有一条 1px 的次级描边。 */
+.card {
+  border: 1px solid var(--lz-border-secondary);
+  border-radius: var(--lz-radius);
+  background: var(--lz-bg-container);
+  padding: var(--lz-space-base) var(--lz-space-md);
+  min-width: 0;
+}
+
+/* 标题行：标题在左，计数/控件在右。 */
+.cardHead {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--lz-space-xs);
+  margin-bottom: var(--lz-space-sm);
+}
+
+.cardHead h3 {
+  margin: 0;
+  font-size: var(--lz-font-lg);
+  font-weight: var(--lz-weight-strong);
+  line-height: 1.4;
+  color: var(--lz-text);
+}
+
+.cardHead .spacer { flex: 1 1 auto; }
+
+/* 卡片副标题：一句话说明这张卡在回答什么 */
+.cardSub {
+  margin: calc(var(--lz-space-xs) * -1) 0 var(--lz-space-sm);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-tertiary);
+}
+
+/* 卡片内的块间距：卡片自己不管孩子，孩子之间靠这个栈 */
+.card > * + * { margin-top: var(--lz-space-sm); }
+
+/* ---------------------------------------------------------------- StatusBadge
+ *
+ * 状态徽标 = 颜色 + 内联 SVG 图标 + 一个词，三者齐备。
+ *
+ * 为什么必须有图标和文字：只说颜色的状态对色盲读者不可读，而且违反设计规则
+ * （"Don't signal state with color alone — pair it with an icon or label"）。
+ * 图标用内联 SVG path 而不是字符，因为帧内的字体子集不一定含勾与叉。 */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lz-space-xxs);
+  padding: 2px var(--lz-space-xs);
+  border-radius: var(--lz-radius-pill);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  white-space: nowrap;
+  color: var(--lz-state-idle);
+  background: var(--lz-state-idle-bg);
+}
+
+.badge svg { flex: none; display: block; }
+
+.badge[data-state='running'] { color: var(--lz-state-running); background: var(--lz-state-running-bg); }
+.badge[data-state='success'] { color: var(--lz-state-success); background: var(--lz-state-success-bg); }
+.badge[data-state='failed'] { color: var(--lz-state-failed); background: var(--lz-state-failed-bg); }
+.badge[data-state='waiting'] { color: var(--lz-state-waiting); background: var(--lz-state-waiting-bg); }
+.badge[data-state='blocked'] {
+  color: var(--lz-state-blocked);
+  background: var(--lz-state-blocked-bg);
+  box-shadow: inset 0 0 0 1px var(--lz-state-blocked);
+}
+.badge[data-state='idle'] { color: var(--lz-state-idle); background: var(--lz-state-idle-bg); }
+
+/* 只有 running 允许动：一个呼吸点，说明"它真的在动"。
+   prefers-reduced-motion 下停掉——这是无障碍分支，不是可选项。 */
+.badge[data-state='running'] .badgePulse {
+  animation: badgePulse 1.6s var(--lz-ease) infinite;
+}
+
+@keyframes badgePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .badge[data-state='running'] .badgePulse { animation: none; }
+}
+
+/* 一行徽标组 */
+.badgeRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--lz-space-xs); }
+
+/* ---------------------------------------------------------------- Progress
+ *
+ * 计数与比例。默认是**计数形态**（"4 / 6 已验证"）而不是百分比——
+ * 数字对得上人要做的事，百分比是个谁也无法测量的精度。 */
+.progress { display: flex; flex-direction: column; gap: var(--lz-space-xxs); min-width: 0; }
+
+.progressHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--lz-space-xs);
+  font-size: var(--lz-font-sm);
+}
+
+.progressLabel { color: var(--lz-text-secondary); min-width: 0; }
+
+.progressCount {
+  color: var(--lz-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.progressTrack {
+  height: 6px;
+  border-radius: var(--lz-radius-pill);
+  background: var(--lz-fill-tertiary);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  border-radius: var(--lz-radius-pill);
+  background: var(--lz-state-running);
+  transition: width var(--lz-duration) var(--lz-ease);
+}
+
+.progress[data-tone='success'] .progressFill { background: var(--lz-state-success); }
+.progress[data-tone='failed'] .progressFill { background: var(--lz-state-failed); }
+.progress[data-tone='waiting'] .progressFill { background: var(--lz-state-waiting); }
+.progress[data-tone='blocked'] .progressFill { background: var(--lz-state-blocked); }
+
+@media (prefers-reduced-motion: reduce) {
+  .progressFill { transition: none; }
+}
+
+/* 指标组：标签在上、数值在下，一个数字和它的说明读作一体 */
+.metrics {
+  display: grid;
+  gap: var(--lz-space-sm) var(--lz-space-base);
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.metric { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+
+.metricLabel {
+  font-size: var(--lz-font-sm);
+  color: var(--lz-text-tertiary);
+  line-height: var(--lz-line-height-sm);
+}
+
+.metricValue {
+  font-size: var(--lz-font-xl);
+  font-weight: var(--lz-weight-strong);
+  color: var(--lz-text);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+/* ---------------------------------------------------------------- Timeline
+ *
+ * 竖线 + 节点 + 内容。用于最近动态、生命周期、变更记录。
+ * 用 ol 语义：它本来就是有序的。 */
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  position: relative;
+}
+
+.timelineItem {
+  position: relative;
+  display: flex;
+  gap: var(--lz-space-sm);
+  padding-bottom: var(--lz-space-sm);
+  min-width: 0;
+}
+
+.timelineItem:last-child { padding-bottom: 0; }
+
+/* 竖线画在节点列的中轴上；最后一项不画，线不会吊在末尾 */
+.timelineItem:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 14px;
+  bottom: 0;
+  width: 1px;
+  background: var(--lz-border-secondary);
+}
+
+.timelineDot {
+  flex: none;
+  width: 11px;
+  height: 11px;
+  margin-top: 4px;
+  border-radius: var(--lz-radius-pill);
+  background: var(--lz-bg-container);
+  box-shadow: inset 0 0 0 2px var(--lz-state-idle);
+  position: relative;
+  z-index: 1;
+}
+
+.timelineItem[data-state='running'] .timelineDot { box-shadow: inset 0 0 0 2px var(--lz-state-running); }
+.timelineItem[data-state='success'] .timelineDot { box-shadow: inset 0 0 0 2px var(--lz-state-success); }
+.timelineItem[data-state='failed'] .timelineDot { box-shadow: inset 0 0 0 2px var(--lz-state-failed); }
+.timelineItem[data-state='waiting'] .timelineDot { box-shadow: inset 0 0 0 2px var(--lz-state-waiting); }
+.timelineItem[data-state='blocked'] .timelineDot { box-shadow: inset 0 0 0 2px var(--lz-state-blocked); }
+
+/* 已完成的节点填实，未到的中空——形状自己就说了一遍 */
+.timelineItem[data-done='true'] .timelineDot { background: var(--lz-state-success); box-shadow: inset 0 0 0 2px var(--lz-state-success); }
+.timelineItem[data-done='false'] .timelineDot { background: var(--lz-bg-container); }
+
+.timelineBody { min-width: 0; flex: 1 1 auto; }
+
+.timelineHead {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: var(--lz-space-xs);
+}
+
+.timelineTime {
+  flex: none;
+  font-size: var(--lz-font-sm);
+  color: var(--lz-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.timelineText { color: var(--lz-text); overflow-wrap: anywhere; }
+
+.timelineSub {
+  margin-top: 2px;
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- TreeView
+ *
+ * 可展开收起的树。用原生 details/summary——它自带键盘可达性与无障碍语义，
+ * 手搓一个 div 树要重新实现这两样，而且通常实现不全。
+ *
+ * 行结构：箭头 + 状态字形 + 标题 + 右侧元信息。 */
+.tree { list-style: none; margin: 0; padding: 0; }
+
+.tree .tree { margin-left: var(--lz-space-md); }
+
+.treeNode { min-width: 0; }
+
+.treeRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lz-space-xs);
+  padding: var(--lz-space-xxs) var(--lz-space-xs);
+  border-radius: var(--lz-radius-sm);
+  min-width: 0;
+}
+
+.treeRow:hover { background: var(--lz-fill-quaternary); }
+
+/* summary 是 treeRow 的一个变体：可点、有原生三角，但三角换成我们自己的箭头 */
+details.treeBranch > summary.treeRow {
+  cursor: pointer;
+  list-style: none;
+}
+
+details.treeBranch > summary.treeRow::-webkit-details-marker { display: none; }
+
+.treeArrow {
+  flex: none;
+  width: 12px;
+  color: var(--lz-text-tertiary);
+  transition: transform var(--lz-duration-fast) var(--lz-ease);
+}
+
+details.treeBranch[open] > summary.treeRow .treeArrow { transform: rotate(90deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .treeArrow { transition: none; }
+}
+
+.treeText {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--lz-text);
+  overflow-wrap: anywhere;
+}
+
+.treeBranch > summary .treeText { font-weight: var(--lz-weight-strong); }
+
+.treeSub {
+  margin: 0 0 0 var(--lz-space-md);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.treeMeta {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--lz-space-xs);
+}
+
+/* 已完成的叶子：整行降一档色，不抢注意力 */
+.treeRow[data-done='true'] .treeText { color: var(--lz-text-secondary); }
+
+/* ---------------------------------------------------------------- EmptyState
+ *
+ * 统一空状态。**禁止空白页面**——每一处"没有东西"都要说出是什么没有、为什么、
+ * 以及能做什么。三者缺一，读者就无法判断这是正常的还是坏了。 */
+.emptyState {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--lz-space-xs);
+  padding: var(--lz-space-xl) var(--lz-space-base);
+  color: var(--lz-text-tertiary);
+}
+
+.emptyStateIcon { color: var(--lz-text-quaternary); }
+
+.emptyStateTitle {
+  font-size: var(--lz-font-base);
+  color: var(--lz-text-secondary);
+  font-weight: var(--lz-weight-strong);
+}
+
+.emptyStateBody {
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  max-width: 52ch;
+  overflow-wrap: anywhere;
+}
+
+.emptyStateAction { margin-top: var(--lz-space-xxs); }
+
+/* 行内空状态：卡片内的一行提示，不做居中大块 */
+.emptyLine {
+  margin: 0;
+  padding: var(--lz-space-xs) 0;
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- 列表行
+ *
+ * 目标中心的验收标准 / 任务 / 证据 / 决策共用一个行结构：
+ * 左侧 ID（等宽，便于引用），中间正文，右侧状态徽标。 */
+.rows { list-style: none; margin: 0; padding: 0; }
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lz-space-sm);
+  padding: var(--lz-space-xs) 0;
+  min-width: 0;
+}
+
+.row + .row { border-top: 1px solid var(--lz-border-secondary); }
+
+.rowId {
+  flex: none;
+  min-width: 56px;
+  font-family: var(--lz-mono);
+  font-size: var(--lz-font-sm);
+  color: var(--lz-text-tertiary);
+  padding-top: 2px;
+}
+
+.rowBody { flex: 1 1 auto; min-width: 0; }
+
+.rowText { margin: 0; color: var(--lz-text); overflow-wrap: anywhere; }
+
+.rowSub {
+  margin: var(--lz-space-xxs) 0 0;
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.rowChips {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lz-space-xxs);
+  justify-content: flex-end;
+}
+
+/* ---- 同步状态行 ----
+ * 计划与当前目标是否还一致。原来是整宽卡片，现在是一行——它想说的只有一句话。
+ * 一致时也显示（「没看见」与「一致」在页面上不能长得一样）。 */
+.driftLine {
+  margin: 0;
+  padding: var(--lz-space-xs) 0;
+}
+
+.driftText {
+  display: flex;
+  align-items: center;
+  gap: var(--lz-space-xs);
+  margin: 0;
+  color: var(--lz-text-secondary);
+}
+
+.driftLine[data-drift='drifted'] .driftText {
+  color: var(--lz-text);
+}
+
+.row[data-done='true'] .rowText { color: var(--lz-text-secondary); }
+
+/* 验收标准的「勾/圈」形态：一个字形在前，一眼扫完所有条目 */
+.checkList { list-style: none; margin: 0; padding: 0; }
+
+.checkItem {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--lz-space-xs);
+  padding: var(--lz-space-xs) 0;
+  min-width: 0;
+}
+
+.checkItem + .checkItem { border-top: 1px solid var(--lz-border-secondary); }
+
+.checkMark { flex: none; margin-top: 2px; color: var(--lz-state-idle); }
+.checkItem[data-state='success'] .checkMark { color: var(--lz-state-success); }
+.checkItem[data-state='failed'] .checkMark { color: var(--lz-state-failed); }
+.checkItem[data-state='running'] .checkMark { color: var(--lz-state-running); }
+.checkItem[data-state='blocked'] .checkMark { color: var(--lz-state-blocked); }
+
+.checkText { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- 键值行 */
+.kv { display: grid; gap: var(--lz-space-xs) var(--lz-space-base); grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+
+.kvItem { min-width: 0; }
+
+.kvLabel {
+  font-size: var(--lz-font-sm);
+  color: var(--lz-text-tertiary);
+  line-height: var(--lz-line-height-sm);
+}
+
+.kvValue { color: var(--lz-text); overflow-wrap: anywhere; }
+
+/* ---------------------------------------------------------------- 代码与原文 */
+code, .mono {
+  font-family: var(--lz-mono);
+  font-size: var(--lz-font-sm);
+  padding: 0.1em 0.35em;
+  border-radius: var(--lz-radius-xs);
+  background: var(--lz-code-bg);
+  overflow-wrap: anywhere;
+}
+
+.rawView {
+  margin: 0;
+  padding: var(--lz-space-sm);
+  border: 1px solid var(--lz-border-secondary);
+  border-radius: var(--lz-radius-sm);
+  background: var(--lz-fill-quaternary);
+  font-family: var(--lz-mono);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-secondary);
+  max-height: 420px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- 提示与状态块 */
+.callout {
+  padding: var(--lz-space-sm);
+  border: 1px solid var(--lz-border-secondary);
+  border-left: 3px solid var(--lz-text-tertiary);
+  border-radius: var(--lz-radius);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.callout[data-kind='warn'] { border-left-color: var(--lz-state-waiting); }
+.callout[data-kind='error'] { border-left-color: var(--lz-state-failed); }
+.callout[data-kind='ok'] { border-left-color: var(--lz-state-success); }
+
+/* 强调块：一句话结论，比正文大一档 */
+.focusBox {
+  padding: var(--lz-space-sm) var(--lz-space-base);
+  border-left: 2px solid var(--lz-accent);
+  border-radius: var(--lz-radius-sm);
+  background: var(--lz-fill-quaternary);
+  color: var(--lz-text);
+  font-size: var(--lz-font-lg);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.focusBox[data-empty='true'] {
+  color: var(--lz-text-tertiary);
+  border-left-color: var(--lz-border);
+  font-size: var(--lz-font-base);
+}
+
+/* 页面级状态块：整页只有一个，居中 */
+.status {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: var(--lz-space-sm);
+  padding: var(--lz-space-xl) var(--lz-space-md);
+  color: var(--lz-text-tertiary);
+}
+
+.statusDetail summary {
+  cursor: pointer;
+  font-size: var(--lz-font-sm);
+  color: var(--lz-text-tertiary);
+}
+
+.statusDetail summary:hover { color: var(--lz-text-secondary); }
+
+.statusDetail code {
+  display: block;
+  margin-top: var(--lz-space-xs);
+  text-align: left;
+  max-width: 72ch;
+  white-space: pre-wrap;
+}
+
+/* ---------------------------------------------------------------- 骨架屏 */
+.skeleton {
+  border-radius: var(--lz-radius-sm);
+  background: var(--lz-fill-secondary);
+  animation: skeletonPulse 1.4s var(--lz-ease) infinite;
+}
+
+@keyframes skeletonPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation: none; }
+}
+
+/* ---------------------------------------------------------------- 按钮 */
+.btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--lz-space-xxs);
+  height: var(--lz-control);
+  padding: 0 var(--lz-space-base);
+  border: 1px solid var(--lz-border);
+  border-radius: var(--lz-radius);
+  background: transparent;
+  color: var(--lz-text);
+  font: inherit;
+  font-size: var(--lz-font-base);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--lz-duration-fast) var(--lz-ease), color var(--lz-duration-fast) var(--lz-ease);
+}
+
+.btnSmall { height: var(--lz-control-sm); padding: 0 var(--lz-space-sm); font-size: var(--lz-font-sm); }
+.btn:hover:not(:disabled) { background: var(--lz-fill-tertiary); }
+
+/* 一屏一个主按钮。primary 只给最重要的那个动作。 */
+.btnPrimary {
+  border-color: transparent;
+  background: var(--lz-primary);
+  color: var(--lz-bg-container);
+}
+
+.btnPrimary:hover:not(:disabled) { opacity: 0.88; }
+
+.btnText {
+  border-color: transparent;
+  background: transparent;
+  color: var(--lz-text-secondary);
+  padding: 0 var(--lz-space-xs);
+}
+
+.btn:disabled { color: var(--lz-text-quaternary); cursor: not-allowed; }
+
+/* 危险动作：静止时是灰字，悬停才变色——否则一排删除按钮像一排告警 */
+.btnDanger { color: var(--lz-text-secondary); }
+
+.btnDanger:hover:not(:disabled) {
+  background: var(--lz-state-failed-bg);
+  color: var(--lz-state-failed);
+}
+
+.btnBar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--lz-space-xs); }
+.btnBar .spacer { flex: 1 1 auto; }
+
+/* ---------------------------------------------------------------- 对话框
+ *
+ * 帧内自建，**绝不用原生 alert / confirm / prompt**：原生对话框是 Electron 窗口的
+ * OS 级模态框，关掉之后键盘焦点不还给 web contents，底部输入框从此点不动，直到用户
+ * 切走再切回。页面里没有别的修法——焦点从来就不在页面手上。
+ *
+ * 三条实现纪律（配合 app.js）：
+ *   1. 关闭时显式 document.body.focus()  ← 原生对话框做不到的那一步
+ *   2. 同一时刻只留一个对话框，否则两层遮罩叠着、下层按钮点不到
+ *   3. 每条路径恰好 resolve 一次（确认 / 取消 / Escape / 点遮罩） */
+.dialogScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--lz-space-lg);
+  background: color-mix(in srgb, #000 42%, transparent);
+}
+
+.dialogScrim[hidden] { display: none; }
+
+.dialog {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lz-space-sm);
+  width: 100%;
+  max-width: 460px;
+  max-height: 80vh;
+  overflow: auto;
+  padding: var(--lz-space-base) var(--lz-space-md);
+  border: 1px solid var(--lz-border-secondary);
+  border-radius: var(--lz-radius-lg);
+  background: var(--lz-bg-elevated);
+  box-shadow: var(--lz-shadow-modal);
+}
+
+.dialogTitle { margin: 0; font-size: var(--lz-font-lg); font-weight: var(--lz-weight-strong); line-height: 1.4; }
+
+.dialogBody {
+  margin: 0;
+  font-size: var(--lz-font-base);
+  line-height: 1.65;
+  color: var(--lz-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.dialogInput {
+  width: 100%;
+  padding: var(--lz-space-xs) var(--lz-space-sm);
+  border: 1px solid var(--lz-border);
+  border-radius: var(--lz-radius);
+  background: var(--lz-bg-container);
+  color: var(--lz-text);
+  font: inherit;
+  font-size: var(--lz-font-base);
+}
+
+.dialogInput:focus-visible { outline: 2px solid var(--lz-focus-ring); outline-offset: 1px; }
+
+.dialogActions { display: flex; justify-content: flex-end; gap: var(--lz-space-xs); margin-top: 2px; }
+
+/* ---------------------------------------------------------------- Markdown
+ *
+ * 渲染产物与编辑器的共同外壳。行宽限制在正文上（65ch），不是限制卡片——
+ * 卡片仍与上下邻居对齐，只有文字收窄。 */
+.prose { max-width: 68ch; color: var(--lz-text); }
+
+.prose h1, .prose h2, .prose h3, .prose h4, .prose h5, .prose h6 {
+  margin: 1.4em 0 0.6em;
+  line-height: 1.35;
+  font-weight: var(--lz-weight-strong);
+}
+
+.prose h1 { font-size: var(--lz-font-2xl); }
+.prose h2 { font-size: var(--lz-font-xl); }
+.prose h3 { font-size: var(--lz-font-lg); }
+.prose h4, .prose h5, .prose h6 { font-size: var(--lz-font-base); }
+.prose > :first-child { margin-top: 0; }
+
+.prose p { margin: 0.7em 0; }
+
+.prose ul, .prose ol { margin: 0.7em 0; padding-left: 1.5em; }
+
+.prose li { margin: 0.25em 0; }
+
+.prose pre {
+  margin: 0.8em 0;
+  padding: var(--lz-space-sm);
+  border: 1px solid var(--lz-border-secondary);
+  border-radius: var(--lz-radius-sm);
+  background: var(--lz-code-bg);
+  overflow: auto;
+}
+
+.prose pre code { padding: 0; background: transparent; font-size: var(--lz-font-sm); }
+
+.prose table {
+  width: 100%;
+  margin: 0.9em 0;
+  border-collapse: collapse;
+  font-size: var(--lz-font-sm);
+}
+
+.prose th, .prose td {
+  border: 1px solid var(--lz-border-secondary);
+  padding: var(--lz-space-xs) var(--lz-space-sm);
+  text-align: left;
+}
+
+.prose th { background: var(--lz-fill-quaternary); font-weight: var(--lz-weight-strong); }
+
+.prose hr { border: none; border-top: 1px solid var(--lz-border-secondary); margin: 1.4em 0; }
+
+.prose blockquote {
+  margin: 0.9em 0;
+  padding-left: var(--lz-space-base);
+  border-left: 3px solid var(--lz-border);
+  color: var(--lz-text-secondary);
+}
+
+.prose a { color: var(--lz-accent); text-decoration: none; }
+.prose a:hover { text-decoration: underline; }
+.prose del { color: var(--lz-text-tertiary); }
+.prose img { max-width: 100%; height: auto; }
+
+/* 任务列表的勾选框 */
+.prose input[type='checkbox'] { margin-right: var(--lz-space-xxs); }
+
+/* ---------------------------------------------------------------- 图表
+ *
+ * 既有部件沿用。取值一律走 token，明暗两套自动生效。 */
+.chartWrap { position: relative; width: 100%; }
+.chartWrap svg { display: block; width: 100%; height: auto; }
+
+.chartWrap:focus-visible {
+  outline: 2px solid var(--lz-focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--lz-radius);
+}
+
+.chartGrid { stroke: var(--lz-border-secondary); stroke-width: 1; stroke-dasharray: 3 4; }
+.chartAxis { fill: var(--lz-text-tertiary); font-size: var(--lz-font-sm); font-variant-numeric: tabular-nums; }
+.chartAxisSub { fill: var(--lz-text-quaternary); font-size: var(--lz-font-sm); }
+.chartLine { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.chartHit { fill: transparent; pointer-events: all; cursor: crosshair; }
+.chartGuide { stroke: var(--lz-border); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+
+.chartTip {
+  position: absolute;
+  z-index: 10;
+  pointer-events: none;
+  min-width: 168px;
+  max-width: 280px;
+  padding: var(--lz-space-xs) var(--lz-space-sm);
+  border: 1px solid var(--lz-border-secondary);
+  border-radius: var(--lz-radius);
+  background: var(--lz-bg-elevated);
+  box-shadow: var(--lz-shadow-popover);
+  font-size: var(--lz-font-sm);
+}
+
+.chartTipHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--lz-space-xs);
+  padding-bottom: var(--lz-space-xxs);
+  border-bottom: 1px solid var(--lz-border-secondary);
+  margin-bottom: var(--lz-space-xxs);
+}
+
+.chartTipLabel { font-weight: var(--lz-weight-strong); color: var(--lz-text); }
+
+.chartTipTotal {
+  margin-left: auto;
+  color: var(--lz-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chartTipRow { display: flex; align-items: center; gap: var(--lz-space-xs); }
+
+.chartTipSwatch { flex: none; width: 8px; height: 8px; border-radius: var(--lz-radius-pill); }
+
+.chartTipName {
+  min-width: 0;
+  color: var(--lz-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chartTipValue {
+  margin-left: auto;
+  color: var(--lz-text);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chartLegend { display: flex; flex-wrap: wrap; gap: var(--lz-space-xs) var(--lz-space-base); margin-top: var(--lz-space-sm); }
+
+.chartLegendItem { display: flex; align-items: center; gap: var(--lz-space-xxs); font-size: var(--lz-font-sm); }
+
+.chartLegendSwatch { flex: none; width: 10px; height: 3px; border-radius: var(--lz-radius-pill); }
+
+.chartLegendName { color: var(--lz-text-secondary); }
+
+.chartLegendValue { color: var(--lz-text-tertiary); font-variant-numeric: tabular-nums; }
+
+/* 入场动画：只在图表的身份真的变了时挂上（切窗口 / 切模式），刷新不重放。
+   属性由 app.js 用定时器摘掉——不用 animationend，因为 reduce 分支下动画是 none，
+   那个事件永不触发，属性会被永久卡住。 */
+[data-animate='true'] .chartLine,
+[data-animate='true'] .chartBar { animation: chartIn var(--lz-duration-slow) var(--lz-ease); }
+
+@keyframes chartIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-animate='true'] .chartLine,
+  [data-animate='true'] .chartBar { animation: none; }
+}
+
+/* 活动阵列：一个自然月，每天一格。
+   未到的日期是**空心虚线格**（占位、无填色），不是「0 用量」的填色格。 */
+.cells {
+  display: grid;
+  gap: var(--lz-space-xxs);
+  grid-template-columns: repeat(auto-fit, minmax(14px, 1fr));
+}
+
+.cell { aspect-ratio: 1; border-radius: var(--lz-radius-xs); background: var(--lz-fill-tertiary); }
+.cell[data-level='1'] { background: color-mix(in srgb, var(--lz-accent) 24%, transparent); }
+.cell[data-level='2'] { background: color-mix(in srgb, var(--lz-accent) 44%, transparent); }
+.cell[data-level='3'] { background: color-mix(in srgb, var(--lz-accent) 66%, transparent); }
+.cell[data-level='4'] { background: var(--lz-accent); }
+
+/* 未来的日期：空心 */
+.cellFuture {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--lz-border-secondary);
+}
+
+.cellsCaption {
+  display: flex;
+  align-items: baseline;
+  gap: var(--lz-space-xs);
+  margin-top: var(--lz-space-xs);
+  font-size: var(--lz-font-sm);
+  color: var(--lz-text-tertiary);
+}
+
+/* 模型用量条（原环形图的表格式表达：名字 + 条 + 占比，一行一读） */
+.modelRows { display: flex; flex-direction: column; gap: var(--lz-space-xs); }
+
+.modelRow { display: flex; align-items: center; gap: var(--lz-space-sm); min-width: 0; }
+
+.modelSwatch { flex: none; width: 10px; height: 10px; border-radius: var(--lz-radius-pill); }
+
+.modelName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--lz-text-secondary);
+}
+
+.modelValue { flex: none; font-variant-numeric: tabular-nums; color: var(--lz-text); }
+
+.modelShare {
+  flex: none;
+  min-width: 48px;
+  text-align: right;
+  color: var(--lz-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------- 分段控件 */
+.segLabel { font-size: var(--lz-font-sm); color: var(--lz-text-tertiary); }
+
+/* ---------------------------------------------------------------- 页脚说明 */
+.note {
+  margin: var(--lz-space-sm) 0 0;
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- 响应式
+ * 窄屏把「一行两侧」的布局折成一个纵向流。 */
+@media (max-width: 720px) {
+  .card { padding: var(--lz-space-sm) var(--lz-space-base); }
+
+  .row { flex-wrap: wrap; }
+
+  .rowChips { width: 100%; justify-content: flex-start; }
+
+  .rowId { min-width: 0; }
+
+  .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .metricValue { font-size: var(--lz-font-lg); }
+}
+
+@media (max-width: 420px) {
+  .metrics { grid-template-columns: minmax(0, 1fr); }
+
+  .kv { grid-template-columns: minmax(0, 1fr); }
+}
+
+
+/* ============================================================ 从旧版恢复的规则
+ *
+ * 这些规则由 tools/recover-legacy-css.mjs **从 git HEAD 的原始样式表原样取出**，不是重写的。
+ *
+ * 来历：v2 重构把帧的单一样式块拆成 tokens / layout / components 三份，并按新的 --lz-*
+ * token 层重写了它们。重写覆盖了**新页面**，却悄悄漏掉了**旧页面仍在用的部分**——
+ * 整个预设编辑器（md* / roster*）、图表部件（chartDot / chartHits / donut*）、
+ * 以及若干共用件（nextList / proposal / saveState / field*）。
+ *
+ * 少一条选择器是**静默**的：不报错，页面只是没样式。只有类名使用差分能发现它，
+ * 那正是 tools/probe-unstyled-classes.mjs 在做的事。
+ *
+ * 取值暂留旧 token：这段代码的正确性靠「与原版逐字相同」来保证，改写取值会引入没人验过的
+ * 视觉变化。等它们被新页面取代时再逐条迁移。
+ */
+
+.nextList { margin: 0; padding-left: 24px; font-size: 14px; line-height: 1.7; }
+
+.nextList li { overflow-wrap: anywhere; }
+
+.proposal {
+  padding: 12px; margin-bottom: 8px; border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-state-warn-primary, #f59e0b);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary, #f59e0b) 8%, transparent);
+}
+
+.proposal:last-child { margin-bottom: 0; }
+
+.chartDot { pointer-events: none; transition: r 120ms cubic-bezier(0.23, 1, 0.32, 1); }
+
+.chartDot { transition: none; }
+
+.chartTipTitle { font-weight: 700; font-size: 12px; white-space: nowrap; }
+
+.chartTipRows { display: flex; flex-direction: column; gap: 4px; }
+
+.chartTipRow .chartSwatch { width: 8px; height: 8px; border-radius: 4px; }
+
+.chartSwatch { width: 10px; height: 10px; border-radius: 4px; flex: none; }
+
+.models { display: grid; grid-template-columns: minmax(170px, 220px) 1fr; gap: 20px; align-items: center; }
+
+.models { grid-template-columns: 1fr; }
+
+.donutWrap { position: relative; display: grid; place-items: center; }
+
+.donutCenter { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 2px; pointer-events: none; }
+
+.donutTotal { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+.donutCaption { color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; }
+
+.modelList { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+
+.markdown { min-width: 0; overflow-wrap: anywhere; }
+
+.markdown h1, .markdown h2, .markdown h3 { margin: 1.2em 0 0.5em; line-height: 1.35; font-weight: 700; }
+
+.markdown h1 { font-size: 24px; margin-top: 0; }
+
+.markdown h2 { font-size: 20px; }
+
+.markdown h3 { font-size: 16px; }
+
+.markdown p { margin: 0.6em 0; }
+
+.markdown ul, .markdown ol { margin: 0.6em 0; padding-left: 1.4em; }
+
+.markdown li { margin: 0.25em 0; }
+
+.markdown code {
+  font-family: ui-monospace, Consolas, monospace; font-size: 0.92em;
+  padding: 0.15em 0.4em; border-radius: 4px;
+  background: var(--dsw-alias-markdown-code-block, rgba(0,0,0,0.05));
+}
+
+.markdown pre {
+  margin: 0.8em 0; padding: 12px 14px; overflow-x: auto;
+  border: 0.5px solid var(--dsw-alias-border-l2, #eee); border-radius: 8px;
+  background: var(--dsw-alias-markdown-code-block, rgba(0,0,0,0.03));
+}
+
+.markdown pre code { padding: 0; background: none; font-size: 12px; line-height: 1.6; }
+
+.markdown table { border-collapse: collapse; margin: 0.8em 0; width: 100%; font-size: 14px; }
+
+.markdown th, .markdown td {
+  border: 0.5px solid var(--dsw-alias-border-l2, #eee); padding: 8px 12px; text-align: left;
+}
+
+.markdown th { background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.03)); font-weight: 700; }
+
+.markdown strong { font-weight: 700; }
+
+.markdown hr { border: none; border-top: 0.5px solid var(--dsw-alias-border-l2, #eee); margin: 1.2em 0; }
+
+/* ---- preset sub-page ----
+   A two-column editor: the roster on the left, the selected agent's prompt on the right.
+   It reuses the page's existing vocabulary (.card / .note / .status / .segment) and adds
+   only what a list-plus-editor needs. Every colour is a semantic token with the same
+   light-mode fallback pattern the rest of this sheet uses, so dark mode is one attribute
+   change and no rule here needs its own dark variant. */
+.presetLayout {
+  display: grid; grid-template-columns: 320px minmax(0, 1fr);
+  gap: 16px; align-items: start;
+}
+
+/* One column below 860px: a 320px rail plus an editor does not fit a narrow pane, and
+     a horizontally scrolling roster is worse than a stacked one. */
+  .presetLayout { grid-template-columns: minmax(0, 1fr); }
+
+.roster { display: flex; flex-direction: column; gap: 4px; max-height: 60vh; overflow-y: auto; padding-right: 2px; }
+
+.rosterGroup { margin-top: 12px; }
+
+.rosterGroup:first-child { margin-top: 0; }
+
+.rosterGroupHead {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: 6px;
+  color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; font-weight: 700;
+}
+
+.rosterGroupHead:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04)); }
+
+.rosterGroupName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+
+.rosterGroupCount { font-variant-numeric: tabular-nums; font-weight: 400; }
+
+/* The group's delete affordance: hidden until the row is hovered or focused, neutral until the
+   pointer is actually on the button, and dangerous only then. Three states, because a
+   destructive action should not shout from every row at once — and a keyboard user must still
+   be able to reach it, which is what :focus-visible covers. */
+.rosterGroupDel {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 6px;
+  background: transparent; color: var(--dsw-alias-label-tertiary, #999);
+  cursor: pointer; opacity: 0;
+  transition: opacity 140ms ease, background-color 140ms ease, color 140ms ease;
+}
+
+.rosterGroupHead:hover .rosterGroupDel,
+.rosterGroupDel:focus-visible { opacity: 1; }
+
+.rosterGroupDel:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04));
+  color: var(--dsw-alias-state-error-primary, #d44);
+}
+
+.rosterGroupDel:focus-visible { outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: 1px; }
+
+.rosterGroupDel svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* Touch and keyboard-only environments have no hover, so the control must not be a ghost
+   there — reveal it whenever hover cannot be relied on. */
+@media (hover: none) { .rosterGroupDel { opacity: 1; } }
+
+.rosterItem {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px; border: 0.5px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--dsw-alias-label-secondary, #666);
+  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+}
+.rosterItem:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04)); }
+.rosterItem[aria-selected='true'] {
+  border-color: var(--dsw-alias-border-l4, #ddd);
+  background: color-mix(in srgb, var(--dsw-static-deepseek-500, #4d6bfe) 10%, transparent);
+  color: var(--dsw-alias-label-primary, #080808);
+}
+.rosterItem:focus-visible { outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: 1px; }
+/* The active agent is a different fact from the selected one: selecting edits it,
+   activating makes the model use it. They are marked separately on purpose. */
+.rosterItemName { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rosterItemActive {
+  flex: none; padding: 1px 6px; border-radius: 999px;
+  background: color-mix(in srgb, var(--dsw-static-deepseek-500, #4d6bfe) 22%, transparent);
+  color: var(--dsw-static-deepseek-500, #4d6bfe); font-size: 12px; font-weight: 700;
+}
+
+.rosterItemHandle {
+  flex: none; cursor: grab; color: var(--dsw-alias-label-tertiary, #999);
+  line-height: 1; user-select: none;
+  display: inline-flex; align-items: center;
+}
+
+.rosterItem[data-dragging='true'] { opacity: 0.5; }
+
+.rosterItem[data-dropBefore='true'] { box-shadow: 0 -2px 0 0 var(--dsw-static-deepseek-500, #4d6bfe); }
+
+.rosterItem[data-dropAfter='true'] { box-shadow: 0 2px 0 0 var(--dsw-static-deepseek-500, #4d6bfe); }
+
+.editor { display: flex; flex-direction: column; gap: 12px; }
+
+.field { display: flex; flex-direction: column; gap: 8px; }
+
+.fieldLabel { color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; }
+
+.input, .textarea, .select {
+  width: 100%; padding: 8px 12px; border: 0.5px solid var(--dsw-alias-border-l4, #ddd);
+  border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff);
+  color: var(--dsw-alias-label-primary, #080808); font: inherit; font-size: 14px;
+}
+
+.input:focus-visible, .textarea:focus-visible, .select:focus-visible {
+  outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: 1px;
+}
+
+.fieldRow { display: flex; flex-wrap: wrap; gap: 12px; }
+
+.fieldRow .field { flex: 1; min-width: 160px; }
+
+/* ---- markdown editor ----
+   One bordered box holding three bands, matching the reference editor: a format toolbar on
+   top, the writing surface in the middle, a status line with the mode picker at the bottom.
+
+   The toolbar is ICON-based and split into groups by hairline dividers. The icons are
+   hand-written SVG paths (MD_ICONS) rather than an icon package: this frame has no React,
+   no bundler and no network, so a dependency would be one more thing to keep alive inside a
+   template literal. Every button carries a title AND an aria-label, because an icon alone
+   is not a name. */
+.mdEditor {
+  border: 0.5px solid var(--dsw-alias-border-l4, #ddd); border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1, #fff);
+  overflow: hidden;
+}
+
+.mdBar {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 1px;
+  padding: 4px 6px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2, #eee);
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.02));
+}
+
+.mdBtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 28px; height: 28px; padding: 0 4px;
+  border: none; border-radius: 6px; background: transparent;
+  color: var(--dsw-alias-label-secondary, #666);
+  font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background-color 160ms cubic-bezier(0.23,1,0.32,1), color 160ms cubic-bezier(0.23,1,0.32,1);
+}
+
+.mdBtn:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.05));
+  color: var(--dsw-alias-label-primary, #080808);
+}
+
+/* Press feedback: the same sub-1 scale the reference uses, so a press is acknowledged
+   before the textarea re-reads. */
+.mdBtn:active:not(:disabled) { transform: scale(0.94); }
+
+.mdBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.mdBtn:focus-visible { outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: 1px; }
+
+/* The active tint is derived from the caret's own line (see activeToolsFor), so it reports
+   what the text actually is — it is never set speculatively. */
+.mdBtn[data-on='true'] {
+  background: color-mix(in srgb, var(--dsw-static-deepseek-500, #4d6bfe) 15%, transparent);
+  color: var(--dsw-static-deepseek-500, #4d6bfe);
+}
+
+.mdBtn svg {
+  width: 15px; height: 15px; display: block;
+  fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+.mdBtn { transition: none; }
+
+.mdBtn:active:not(:disabled) { transform: none; }
+
+.mdDivider { flex: none; width: 1px; height: 16px; margin: 0 4px; background: var(--dsw-alias-border-l4, #ddd); }
+
+/* ---- one surface, rendered and editable ----
+   The reference editor's 'visual' mode is not "markers dimmed" — it is the RENDERED form: the
+   markers are gone, headings are headings, bold is bold, lists are lists. You edit that.
+
+   HOW: the rendered document itself is the editable surface (a contenteditable element). There
+   is no mirror layer and no alignment constraint, because there is only one layer — the same
+   HTML you would otherwise be reading. That is why this is simpler AND more correct than the
+   marker-dimming version it replaces.
+
+   Two surfaces exist in total: the rendered one (editable in live mode, read-only in reading
+   mode) and the raw textarea (source mode). Exactly one is visible per mode. */
+.mdArea { display: flex; min-width: 0; min-height: 0; height: clamp(280px, 44vh, 560px); }
+
+/* The rendered surface. Full typography is allowed here — nothing has to stay aligned with a
+   textarea any more, so headings get their real size and weight, and bold gets real weight. */
+.mdVisual {
+  flex: 1; min-width: 0; min-height: 0; overflow: auto;
+  padding: 12px 16px;
+  outline: none;
+  /* Positions the empty-state hint (below), which overlays the first line rather than
+     occupying a line of its own. */
+  position: relative;
+  font-family: 'Luzzy Sans', 'Luzzy PuHuiTi', system-ui, sans-serif;
+  font-size: 14px; line-height: 1.72;
+  color: var(--dsw-alias-label-primary, #080808);
+}
+
+.mdVisual[contenteditable='false'] { cursor: default; }
+
+.mdVisual:focus-visible { outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: -2px; }
+
+/* An empty block still needs a line box, or the caret has nowhere to sit and the document
+   collapses when every line is deleted. */
+.mdVisual > * { min-height: 1.72em; }
+
+.mdVisual p:empty::after,
+.mdVisual h1:empty::after, .mdVisual h2:empty::after, .mdVisual h3:empty::after,
+.mdVisual h4:empty::after, .mdVisual h5:empty::after, .mdVisual h6:empty::after,
+.mdVisual li:empty::after, .mdVisual blockquote:empty::after {
+  content: '\\200b';   /* zero-width space: keeps the line box without showing anything */
+}
+
+/* The empty-editor hint.
+   Generated content, not an element, and that placement is the whole point: CSS content is not
+   in the DOM, so serializeMarkdown reading childNodes can never pick it up. A real placeholder
+   node would have to be excluded by hand, and the day someone forgot would be the day a hint
+   got written into a user's system prompt.
+   Absolute rather than in-flow, because the focus handler seeds an empty paragraph to give the
+   caret a home — an in-flow hint would push that line down and leave a gap under the text.
+   Driven by data-empty from the renderer, NOT by :empty: the seeded paragraph makes the
+   container non-empty, so a :empty selector would drop the hint the moment the box was focused.
+   The textarea carries its own placeholder for source mode; this covers live mode, where the
+   textarea is display:none and that hint is therefore invisible. */
+.mdVisual[data-empty='true']::before {
+  content: '在这里写这个智能体的 system prompt…';
+  position: absolute; top: 12px; left: 16px;
+  color: var(--dsw-alias-label-tertiary, #999);
+  pointer-events: none;
+}
+
+.mdArea[data-mode='source'] .mdVisual,
+.mdArea[data-mode='live'] textarea.mdLayer,
+.mdArea[data-mode='reading'] textarea.mdLayer { display: none; }
+
+/* Source mode is the raw Markdown, monospaced. */
+textarea.mdLayer {
+  flex: 1; min-width: 0; min-height: 0;
+  margin: 0; padding: 12px 14px;
+  border: none; resize: none; outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary, #080808);
+  font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.6;
+  white-space: pre-wrap; overflow-wrap: break-word;
+}
+
+textarea.mdLayer::placeholder { color: var(--dsw-alias-label-tertiary, #999); }
+
+textarea.mdLayer:focus-visible { outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: -2px; }
+
+/* ---- editor status line ---- */
+.mdFoot {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 8px;
+  border-top: 0.5px solid var(--dsw-alias-border-l2, #eee);
+  background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.02));
+  font-size: 12px; color: var(--dsw-alias-label-tertiary, #999);
+}
+
+.mdFootCount { font-variant-numeric: tabular-nums; }
+
+.mdMode { position: relative; }
+
+.mdModeBtn {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 26px; padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4, #ddd); border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-1, #fff);
+  color: var(--dsw-alias-label-secondary, #666);
+  font: inherit; font-size: 12px; cursor: pointer;
+  transition: color 160ms cubic-bezier(0.23,1,0.32,1);
+}
+
+.mdModeBtn:hover { color: var(--dsw-alias-label-primary, #080808); }
+
+.mdModeBtn:focus-visible { outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: 1px; }
+
+.mdModeBtn svg {
+  width: 12px; height: 12px; fill: none; stroke: currentColor;
+  stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round;
+}
+
+.mdModeBtn { transition: none; }
+
+/* The menu opens UPWARD: it is anchored to the bottom edge of the box, so there is no room
+   below it. */
+.mdMenu {
+  position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 20;
+  display: flex; flex-direction: column; gap: 1px;
+  min-width: 136px; padding: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l2, #eee); border-radius: 8px;
+  background: var(--dsw-alias-bg-layer-1, #fff);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.16);
+}
+
+.mdMenu[hidden] { display: none; }
+
+.mdMenuItem {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px; border: none; border-radius: 6px; background: transparent;
+  color: var(--dsw-alias-label-primary, #080808);
+  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+}
+
+.mdMenuItem:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.05)); }
+
+.mdMenuItem:focus-visible { outline: 2px solid var(--dsw-static-deepseek-500, #4d6bfe); outline-offset: 1px; }
+
+.mdCheck {
+  flex: none; width: 13px; height: 13px;
+  fill: none; stroke: currentColor; stroke-width: 2.5;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+
+.mdMenuItemLabel { flex: 1; }
+
+/* ---- markdown inline the renderer now emits ---- */
+.markdown del { color: var(--dsw-alias-label-tertiary, #999); }
+
+.markdown .mdTask { display: flex; align-items: flex-start; gap: 8px; list-style: none; }
+
+.markdown .mdTask .mdBox {
+  flex: none; width: 12px; height: 12px; margin-top: 4px;
+  border: 1.5px solid var(--dsw-alias-border-l4, #ddd); border-radius: 4px;
+}
+
+.markdown .mdTask .mdBox[data-done='1'] {
+  border-color: var(--dsw-static-deepseek-500, #4d6bfe);
+  background: var(--dsw-static-deepseek-500, #4d6bfe);
+}
+
+/* Links are real links in the preview; keep the frame's own colour ramp so they read as
+   links in both themes without introducing a new accent. */
+.markdown a { color: var(--dsw-static-deepseek-500, #4d6bfe); text-decoration: none; }
+
+.markdown a:hover { text-decoration: underline; }
+
+.markdown blockquote {
+  margin: 0.6em 0; padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--dsw-alias-border-l4, #ddd);
+  color: var(--dsw-alias-label-secondary, #666);
+}
+
+.markdown blockquote p { margin: 0.3em 0; }
+
+.btnRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* A state, not a control: it reports what is already true. Sized like a button so the row
+   keeps its rhythm, but with no border, no hover and no pointer. */
+.stateBadge {
+  display: inline-flex; align-items: center; height: 32px; padding: 0 12px;
+  border-radius: 8px; background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.03));
+  color: var(--dsw-alias-label-tertiary, #999); font-size: 14px;
+}
+
+.saveState { font-size: 12px; color: var(--dsw-alias-label-tertiary, #999); }
+
+.saveState[data-kind='dirty'] { color: var(--dsw-alias-state-warn-primary, #a60); }
+
+.saveState[data-kind='saved'] { color: var(--dsw-alias-state-success-primary, #287); }
+
+.saveState[data-kind='failed'] { color: var(--dsw-alias-state-error-primary, #d44); }
+
+.sessionRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+.sessionPreset {
+  padding: 2px 8px; border-radius: 999px; font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px; background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+}

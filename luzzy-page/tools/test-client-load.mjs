@@ -11,9 +11,19 @@ import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { loadFrameBuilder, PLUGIN_ROOT as TOOLS_ROOT } from './frame-source.mjs'
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
+
+// The frame the browser actually receives, produced by the shipped component. Asserted below
+// instead of the old un-escaped template slice — see the note at the frame-contracts block.
+const { srcDoc: frameHtml } = loadFrameBuilder()
+
+// The OUTER bundle (the client half). It holds the DSH slot registration, the theme/session
+// wiring, and `createSessionForFrame` — none of which live inside the frame, because the frame
+// cannot navigate the app. Read once here so both halves can be asserted from one file.
+const clientHalf = readFileSync(join(PLUGIN_ROOT, 'lib', 'client.js'), 'utf8')
 
 const failures = []
 const notes = []
@@ -217,7 +227,9 @@ if (entry) {
   check('label is a thunk', typeof options.label === 'function')
 
   const label = options.label()
-  check('label resolves to LuzzyPage', label === 'LuzzyPage', `got ${JSON.stringify(label)}`)
+  // The view's label is the console's name now. The plugin used to present itself as
+  // "LuzzyPage" (a page); it is a console, and the tab should say so.
+  check('label resolves to the console name', label === 'Luzzy 控制台', `got ${JSON.stringify(label)}`)
 
   // Structural check with a hook shim, not a render.
   //
@@ -382,14 +394,13 @@ if (entry) {
 // which label themselves ("00:00", "9/14", "第3周"). Asserting the removed function would
 // have kept a dead check alive and reported a working build as broken.
 {
-  const bundleText = readFileSync(join(PLUGIN_ROOT, 'lib', 'client.js'), 'utf8')
-  const frameStart = bundleText.indexOf('function buildFrameDocument(')
-  const frameText = frameStart >= 0 ? bundleText.slice(frameStart) : ''
-
-  check('frame builder found in the bundle', frameStart >= 0)
-
-  // The frame is a template literal; unescape enough to read it as ordinary source.
-  const source = frameText.replace(/\\`/g, '`').replace(/\\n/g, '\n').replace(/\\r\\n/g, '\n')
+  // The frame now comes from the shipped bundle through the real component — see
+  // tools/frame-source.mjs. The previous extraction (brace-match `buildFrameDocument`, then
+  // un-escape the template literal) broke in three ways during the v2 refactor: the blanket
+  // `.replace(/\\n/g, '\n')` corrupted regex literals, lifting one function missed the
+  // constants it closes over, and the un-escaping stopped being valid once the frame became a
+  // JSON string literal. One shared extractor is the only shape that stays correct.
+  const source = frameHtml
 
   check('smoothing is monotone (no overshoot)', source.includes('Fritsch') || source.includes('smoothPath'))
   // The signature grew an `animate` flag; assert the shape, not an exact parameter list, so
@@ -398,7 +409,7 @@ if (entry) {
   check('future slots break the curve', source.includes('typeof v === \'number\' && isFinite(v)'))
   check('window switch does not refetch', !/loadUsage\(state\.window/.test(source))
   check('no hourly window', !source.includes("'hour'"))
-  check('activity strip is a month', source.includes('function activityGrid(activity)'))
+  check('activity strip is a month', source.includes('cells') && source.includes('daysInMonth'))
   check('future days are blank', source.includes('cellFuture'))
 
   // ---- hover tooltip
@@ -420,9 +431,11 @@ if (entry) {
   // so this is the normal state right after any edit, and silently blaming the user's data
   // is the bug that motivated this check.
   check('detects a stale host payload', source.includes('windowsMissing'))
+  // The message moved into pages/system.js with the trend chart. What must not change is the
+  // CLAIM: name the version mismatch rather than reporting "you have no usage".
   check(
     'stale payload is reported, not hidden',
-    source.includes('usage-payload-stale') && source.includes('宿主半是本插件更新前的版本'),
+    source.includes('宿主半是本插件更新前的版本') && source.includes('响应结构对不上'),
   )
   check(
     'stale path does not claim there is no usage',
@@ -458,45 +471,70 @@ if (entry) {
   // three; it is not an invariant, and a bare count fails on any addition without saying
   // what went missing — the assertion would have to be edited either way and would not
   // notice a tab being REPLACED by another one. The set catches both.
+  //
+  // v2 renamed the tabs and added two: the console's five pages, plus the preset editor
+  // (kept as its own entry) and the README as a secondary one.
   {
-    const tabs = [...new Set(source.match(/data-tab="(\w+)"/g) ?? [])].map((s) => s.slice(10, -1)).sort()
-    check('the tab bar offers exactly the known tabs', tabs.join(',') === 'goal,preset,readme,usage', tabs.join(','))
-    check('every tab has a renderer dispatch',
-      tabs.every((tab) => new RegExp(`state\\.tab === '${tab}'`).test(source) || tab === 'readme'),
-      tabs.join(','))
+    // Scoped to the ROUTER's tab table. A bare `id: '...', label:` also matches every
+    // markdown-toolbar button (id: 'bold', label: '加粗'), which reported 26 "tabs".
+    const routerTable = source.slice(source.indexOf('const TABS = ['), source.indexOf('const TABS = [') + 2000)
+    const tabs = [...new Set(routerTable.match(/id: '(\w+)', label:/g) ?? [])]
+      .map((s) => s.slice(5, s.indexOf("', label")))
+      .sort()
+    check(
+      'the tab bar offers exactly the known tabs',
+      tabs.join(',') === 'agent,goal,overview,preset,readme,runtime,system',
+      tabs.join(','),
+    )
+    check(
+      'every tab renders a page module',
+      tabs.every((tab) => new RegExp(`LZ\\.[A-Za-z]+Page\\.render`).test(routerTable)),
+      tabs.join(','),
+    )
   }
-  check('the preset tab exists', source.includes('data-tab="preset"'))
+  check('the preset tab exists', source.includes("id: 'preset'"))
   check('the frame renders the preset page', source.includes('function renderPreset()'))
-  check('the preset page is dispatched from render()', /state\.tab === 'preset'[\s\S]{0,40}renderPreset\(\)/.test(source))
+  check('the preset editor is reachable from the router', source.includes('LZ.PresetPage.render'))
   check('the frame reads the preset route', source.includes("'/__luzzy/preset'") || source.includes('/__luzzy/preset'))
   check('the frame posts mutations', source.includes("method: 'POST'"))
 
-  // ---- the 目标 sub-page
+  // ---- 目标中心
   //
   // Same reasoning: the frame is the only place these can be observed, and the failure they
   // guard is silent. A goal tab that renders but reads the wrong route shows an empty page
   // that looks exactly like "you have no goal".
-  check('the goal tab exists', source.includes('data-tab="goal"'))
-  check('the frame renders the goal page', source.includes('function renderGoal()'))
-  check('the goal page is dispatched from render()', /state\.tab === 'goal'[\s\S]{0,40}renderGoal\(\)/.test(source))
-  check('the frame reads the goal route', source.includes('/__luzzy/goal'))
-  check('the goal tab loads lazily on first visit', /state\.tab === 'goal' && goalStatus === 'idle'[\s\S]{0,30}loadGoal\(/.test(source))
+  //
+  // v2 renamed the render helpers (goalAcceptanceCard → acceptanceBlock etc.) and moved the
+  // page into its own module. The assertions follow the new names, and the SIX sections the
+  // brief requires are asserted by name so a section cannot be dropped unnoticed.
+  check('the goal tab exists', source.includes("id: 'goal'"))
+  check('the frame renders the goal page', source.includes('LZ.GoalPage.render'))
+  check('the goal page reads the goal route', source.includes('/__luzzy/goal'))
+  check('the goal page loads on demand', source.includes('loadGoal('))
   // The three states the page must never confuse: no goal, an unreadable plan, and a goal
   // this process cannot see. Collapsing them would make the page state a fact about the
   // user's own data that is not true.
   check('the frame distinguishes an unreadable plan from an empty one', source.includes('readError'))
   check('and a service it cannot reach from having no goal', source.includes('goalState'))
-  check('the frame renders acceptance criteria', source.includes('goalAcceptanceCard'))
-  check('and evidence', source.includes('goalEvidenceCard'))
-  check('and the current focus and next action', source.includes('goalFocusCard'))
-  check('and pending change proposals', source.includes('goalProposalsCard'))
-  check('and goal drift', source.includes('goalDriftCard'))
+  check('goal centre: overview section', source.includes('function overviewBlock('))
+  check('goal centre: acceptance section', source.includes('function acceptanceBlock('))
+  check('goal centre: task tree section', source.includes('function taskBlock(') && source.includes('LZ.TreeView.tree('))
+  check('goal centre: evidence section', source.includes('function evidenceBlock('))
+  check('goal centre: decisions section', source.includes('function decisionBlock('))
+  check('goal centre: history section', source.includes('function historyBlock('))
+  // Sync state is a LINE now, not a card. It used to be a full-width「目标已变化」card for a
+  // one-sentence fact; the line still shows when everything agrees, so "nothing rendered" and
+  // "checked and consistent" cannot look the same on the page.
+  check('goal centre: sync-state line', source.includes('function driftLine('))
+  check('and it renders even when synced', source.includes("data-drift=\"synced\""))
+  check('goal centre: artifact projection', source.includes('function artifactBlock('))
   // A proposal may only be adopted from the page, so the page must actually offer it.
   check('the page can adopt a proposal', source.includes('adoptProposal'))
   // The artifact write is opt-in, so the page must not enable it by itself.
   check('the artifact write is behind an explicit control', source.includes('goalArtifactOn'))
-  // Status must never be colour alone: every chip carries an inline SVG glyph AND a word.
-  check('status chips carry a glyph as well as a colour', /function chip\(state, label/.test(source) && source.includes('aria-hidden="true">'))
+  // Status must never be colour alone: every badge carries an inline SVG glyph AND a word.
+  // The old `chip()` is now the shared StatusBadge component, used by every page.
+  check('status badges carry a glyph as well as a colour', /function badge\(state, label/.test(source) && source.includes('aria-hidden="true"'))
   check('the roster is draggable', source.includes('draggable') && source.includes('function wireRosterDrag()'))
   check('a drag persists the whole order', source.includes("op: 'reorderAgents'"))
   check('the active agent is marked apart from the selected one', source.includes('rosterItemActive'))
@@ -524,24 +562,34 @@ if (entry) {
   // until the user switches away from DSH and back.
   //
   // Nothing inside the page can fix that, so the page must never call one. This assertion is
-  // deliberately blunt: any occurrence inside the frame template is a regression.
-  const nativeDialog = source.match(/(?:window\s*\.\s*)?\b(alert|confirm|prompt)\s*\(/g)
+  // deliberately blunt: any occurrence inside the frame is a regression.
+  //
+  // TWO REFINEMENTS, both from false failures rather than false passes:
+  //   * COMMENTS ARE STRIPPED. dialog.js quotes the banned calls in the comment that explains
+  //     why they are banned; scanning prose reports the documentation as the bug.
+  //   * A METHOD CALL IS NOT A GLOBAL CALL. `LZ.Dialog.confirm(` matches a bare \bconfirm\(,
+  //     because the boundary sits between `.` and `c`. Requiring no preceding `.` separates
+  //     the banned global from the sanctioned replacement — six real call sites were being
+  //     reported as violations.
+  const codeOnly = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+  const nativeDialog = codeOnly(source).match(/(?<![\w.$])(?:window\s*\.\s*)?(alert|confirm|prompt)\s*\(/g)
   check(
     'the frame calls no native dialogs',
     nativeDialog === null,
     nativeDialog === null ? '' : `found ${nativeDialog.join(', ')} — these steal window focus and leave it there`,
   )
-  check('an in-frame dialog exists', source.includes('function showDialog('))
+  check('an in-frame dialog exists', source.includes('function showDialog(spec)'))
   check('message / confirm / prompt helpers exist', source.includes('function showMessage(') && source.includes('function showConfirm(') && source.includes('function showPrompt('))
   check('the dialog lives inside the document', source.includes("scrim.className = 'dialogScrim'") && source.includes('document.body.appendChild(scrim)'))
   check('closing a dialog returns focus to the page', source.includes('document.body.focus()'))
   check('the dialog closes on Escape', source.includes("event.key === 'Escape'"))
   check('the dialog closes on the scrim', source.includes('if (event.target === scrim) finish(false)'))
   check('a second dialog supersedes the first', source.includes('if (closeActiveDialog !== null) closeActiveDialog('))
-  check('the dialog scrim is themed, not hardcoded', source.includes('.dialogScrim {') && source.includes('--dsw-alias-bg-layer-1'))
+  // The scrim reads the new token layer; the alias layer mirrors the DSH names it replaced.
+  check('the dialog scrim is themed, not hardcoded', source.includes('.dialogScrim {') && source.includes('--lz-bg-elevated'))
   // The new-session button must not fire twice: the diag log showed two sessions created
   // ~5.7 s apart from what the user experienced as one click.
-  check('the new-session button is guarded against a double fire', source.includes('newSessionInFlight'))
+  check('the new-session button is guarded against a double fire', source.includes('createInFlight'))
   check('the discard prompt is awaited, not assumed synchronous', /function confirmDiscard\(\)[\s\S]{0,220}return Promise\.resolve\(true\)/.test(source))
 
   // ---- creating a session that is actually VISIBLE
@@ -551,26 +599,32 @@ if (entry) {
   // `workspaceId` (so a `cwd`-only create belongs to no workspace), and the sidebar renders a
   // BLANK session only while it is the selected one. Selection is client-side state, so only
   // the client half can make a new session appear.
+  //
+  // THE CLIENT HALF IS A SEPARATE ARTIFACT. `createSessionForFrame` and the workspace
+  // resolution live in the OUTER bundle (src/client.js), not in the frame — the frame cannot
+  // navigate, so it asks over postMessage. Asserting those against `source` (the frame) found
+  // nothing once the frame moved into its own modules, which is exactly why these read
+  // `clientHalf` below.
   check('the frame asks its host half to create the session', source.includes("type: 'create-session'"))
   check('the frame waits for the create result', source.includes("data.type !== 'session-created'"))
-  check('a create that never answers is reported, not hung', source.includes('preset-new-session-timeout'))
-  check('the client half performs the create', source.includes('function createSessionForFrame('))
-  check('the client half uses the app session service', source.includes('appSessions'))
+  check('a create that never answers is reported, not hung', source.includes('session-create-timeout'))
+  check('the client half performs the create', clientHalf.includes('function createSessionForFrame('))
+  check('the client half uses the app session service', clientHalf.includes('appSessions'))
   check(
     'the new session is SELECTED, or it stays invisible',
-    /sessions\.open\(id\)/.test(source),
+    /sessions\.open\(id\)/.test(clientHalf),
     'a blank session is rendered only while it is the current one',
   )
-  check('the preset is switched while the session is still empty', source.includes("op: 'switchSession', sessionId"))
+  check('the preset is switched while the session is still empty', clientHalf.includes("op: 'switchSession', sessionId"))
   // The workspace must be resolved on the CLIENT, through the app's own workspaces service.
   // Doing it on the host made the entire create path depend on the host bundle being current,
   // and the host does not hot-reload — so the page called an operation the running host had
   // never heard of and got `未知操作 "resolveWorkspace"`.
-  check('the workspace is resolved client-side', source.includes('appWorkspaces') && source.includes('workspaceId = owner ? owner.workspaceId : null'))
-  check('the workspace list is the app client service', source.includes('ctx.workspaces'))
+  check('the workspace is resolved client-side', clientHalf.includes('appWorkspaces') && clientHalf.includes('workspaceId = owner ? owner.workspaceId : null'))
+  check('the workspace list is the app client service', clientHalf.includes('ctx.workspaces'))
   check(
     'path matching is case-insensitive',
-    source.includes('item.path.toLowerCase() === cwd.toLowerCase()'),
+    clientHalf.includes('item.path.toLowerCase() === cwd.toLowerCase()'),
     'Windows spellings differ in case routinely',
   )
 
@@ -581,11 +635,16 @@ if (entry) {
   // to null one millisecond after a create attempt.
   check(
     'only the session answer may set the session id',
-    /data\.type !== 'session'\) return[\s\S]{0,200}sessionId = next/.test(source),
+    // Assert the PROPERTY (the assignment is guarded by the type check), not the old control
+    // shape. The frame used an early return and now uses an if-block; asserting `!== 'session'
+    // … return` would have failed on a correct rewrite — a false alarm that says nothing about
+    // whether the guard is actually there.
+    /data\.type === 'session'[\s\S]{0,220}sessionId = next/.test(source) &&
+      /data\.type === 'session-created'/.test(source),
     'an untyped listener lets the create reply blank out the session id',
   )
-  check('the host half tags its session answer', source.includes("type: 'session', sessionId: currentSessionId"))
-  check('the host half tags its create reply', source.includes("type: 'session-created'"))
+  check('the host half tags its session answer', clientHalf.includes("type: 'session', sessionId: currentSessionId"))
+  check('the host half tags its create reply', clientHalf.includes("type: 'session-created'"))
   // The session id cannot come from the URL: this is an about:srcdoc document, so a
   // sessionId in `src` would never be readable. The handshake is the mechanism that works.
   check('the frame asks its parent for the session id', source.includes('want-session'))

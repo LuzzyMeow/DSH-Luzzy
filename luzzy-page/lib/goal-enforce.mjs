@@ -717,7 +717,7 @@ export function installEnforcement(ctx, deps) {
   // refusing to start a step the model could otherwise do useful work in would be the wrong
   // trade. (Contrast `tools/pre-execute`, where unreadable state MUST refuse.)
   if (options.preflight) {
-    ctx.on('agent/pre-step', async ({ agent, turn, step, signal }, next) => {
+    ctx.on('agent/pre-step', async ({ agent, messages, turn, step, signal }, next) => {
       const decision = await next()
       if (decision.kind !== 'enter') return decision
       // Same reasoning as the commit barrier: a step on an aborted turn is about to be thrown
@@ -810,12 +810,33 @@ export function installEnforcement(ctx, deps) {
         artifactPath: artifact?.path,
         changedSinceLastInjection: changed,
       })
+      const notice = pluginNotice(text, changed ? '目标已更新' : '目标状态')
+      // WHERE the notice goes, and why it is not the tail.
+      //
+      // This used to append to the end of `decision.messages`. The core's own context-injecting
+      // plugin (`dsh-agent-instructions`) does something different and deliberate: it inserts
+      // AFTER THE LAST MESSAGE THIS TURN CLAIMED —
+      //
+      //     const lastClaimedIndex = decision.messages.findLastIndex((m) => messages.includes(m))
+      //     decision.messages.toSpliced(lastClaimedIndex + 1, 0, desired)
+      //
+      // — so the injected block sits immediately after the user message it is orienting, and
+      // whatever the loop appended after that (steering messages, other plugins' context) keeps
+      // its position. Appending at the tail instead would put this block after those, i.e. it
+      // would read as the newest thing in the turn rather than as context for the request.
+      //
+      // Matching the core is also the KV-friendly choice: the same convention means the same
+      // cache prefix shape as the built-in path, instead of a second insertion point that
+      // diverges on every turn.
+      //
+      // `messages` is this step's claimed set (the waterfall's own argument). If nothing matches
+      // — a synthetic turn with no claimed user message — fall back to the tail rather than
+      // dropping the notice: an orientation that never arrives is worse than one slightly late.
+      const lastClaimedIndex = decision.messages.findLastIndex((message) => messages.includes(message))
+      const insertedAt = lastClaimedIndex < 0 ? decision.messages.length : lastClaimedIndex + 1
       return {
         ...decision,
-        messages: [
-          ...decision.messages,
-          pluginNotice(text, changed ? '目标已更新' : '目标状态'),
-        ],
+        messages: decision.messages.toSpliced(insertedAt, 0, notice),
       }
     })
   }
