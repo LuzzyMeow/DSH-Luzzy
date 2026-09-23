@@ -1,0 +1,33 @@
+# 参考区：外部仓库，不入版本控制（体积大且可重新克隆）
+reference/
+
+# 第三方内容：B 站视频的字幕与公开评论笔记，含他人内容，不随本仓库分发。
+# 文件留在本地供调研使用，只是不进版本控制。
+docs/NOTES-B站两期视频笔记.md
+
+# 依赖与构建产物
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+
+# 参考仓库的编译产物（lobe-icons / lobe-ui 走构建流程）
+.eslintcache
+.turbo/
+.changeset/*.md.bak
+
+# 临时与日志
+logs/
+*.log
+*.tmp
+
+# 工具的写前保护副本（AOCI 在改 AGENTS.md 这类托管文件前会留一份）
+*.backup.*
+*.bak
+
+# 凭证类（用完即删，绝不入库）
+.env
+.env.*
+*cookies*
+*credential*
+*token*

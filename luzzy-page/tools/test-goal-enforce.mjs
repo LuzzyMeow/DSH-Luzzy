@@ -1,0 +1,960 @@
+/**
+ * Assert the enforcement hooks: the completion gate, the `get_goal` augmentation, and the
+ * bounded commit barrier.
+ *
+ * These are the parts that make the plan more than a viewer, so the tests drive the REAL
+ * handlers — registered through a stand-in context, then invoked with the exact argument
+ * shapes `dsh-tools` and `dsh-agent-loop` pass.
+ *
+ * WHY THE STAND-IN THROWS
+ *
+ * The context proxy real cordis installs THROWS for any service name the calling fiber did
+ * not declare in `inject`:
+ *
+ *     cannot get property "goals" without inject
+ *
+ * and the throw happens while the expression is being evaluated, so `ctx.goals?.get` cannot
+ * guard it. A plain object stand-in cannot reproduce that, and a stand-in that is more
+ * permissive than the real system is a blind spot that passes while production 500s. So the
+ * proxy below throws the same message for the same reason. (This exact mistake once took a
+ * whole sub-page down on a real machine while four suites were green.)
+ *
+ * Run: node tools/test-goal-enforce.mjs
+ */
+
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { pathToFileURL } from 'node:url'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+const enforce = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-enforce.mjs')).href)
+const domain = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-domain.mjs')).href)
+const store = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-store.mjs')).href)
+
+let failures = 0
+let checks = 0
+
+function check(label, condition, detail = '') {
+  checks += 1
+  if (condition) {
+    console.log(`  ok   ${label}`)
+    return
+  }
+  failures += 1
+  console.log(`  FAIL ${label}${detail === '' ? '' : ` — ${detail}`}`)
+}
+
+function eq(label, actual, expected) {
+  check(label, Object.is(actual, expected), `got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`)
+}
+
+const AT = Date.now()
+const GOAL = {
+  id: 'goal-abc', revision: 3, objective: '把 Dashboard 接入 /api/tasks', phase: 'active',
+  activation: 'armed', roundsStarted: 2, maxGoalRounds: 256,
+}
+
+const tempRoots = []
+function freshPaths() {
+  const home = mkdtempSync(join(tmpdir(), 'luzzy-goal-enforce-'))
+  tempRoots.push(home)
+  return store.storePaths(home)
+}
+
+/**
+ * A cordis-shaped context stand-in: declared services resolve, undeclared ones THROW.
+ *
+ * @param {object} services - the services mounted for this test.
+ * @param {string[]} declared - names the plugin declared in `inject`.
+ */
+function fakeCtx(services, declared = ['webServer']) {
+  const listeners = new Map()
+  const registeredTools = []
+  const declaredSet = new Set(declared)
+  const ctx = {
+    listeners,
+    registeredTools,
+    on(name, handler, options) {
+      if (!listeners.has(name)) listeners.set(name, [])
+      listeners.get(name).push({ handler, options })
+      return () => {}
+    },
+    effect(fn) {
+      fn()
+      return () => {}
+    },
+    get(name) {
+      return services[name]
+    },
+  }
+  // The proxy is what actually reproduces cordis: `ctx.<name>` for an undeclared property
+  // throws rather than returning undefined.
+  return new Proxy(ctx, {
+    get(target, property) {
+      if (property in target) return target[property]
+      if (typeof property !== 'string') return undefined
+      if (declaredSet.has(property)) return services[property]
+      if (Object.prototype.hasOwnProperty.call(services, property)) {
+        throw new Error(`cannot get property "${property}" without inject`)
+      }
+      throw new Error(`cannot get property "${property}" without inject`)
+    },
+  })
+}
+
+/**
+ * Invoke the registered listeners for one event, like the real dispatch does.
+ *
+ * Two shapes are needed, and they are genuinely different:
+ *
+ *   * waterfall (`tools/pre-execute`, `tools/post-execute`, `agent/pre-step`) — the handler
+ *     receives a `next` thunk as its LAST argument and returns a decision. Downstream
+ *     listeners are reached only if a handler calls `next()`, so the harness below passes a
+ *     `next` that runs the remaining listeners.
+ *   * plain serial (`agent/turn-stopping`) — the handler receives the payload only, and its
+ *     return value is discarded by the caller.
+ *
+ * The dispatch shape is inferred from how many arguments the call site passes, which is
+ * unambiguous because each event has a fixed arity:
+ *
+ *   1 argument  → plain serial (`agent/turn-stopping`). The handler gets the payload and
+ *                 its return value is discarded, exactly as the loop discards it.
+ *   2 arguments → one-argument waterfall (`tools/pre-execute`): handler(exec, next), the
+ *                 second argument being what the innermost `next()` resolves to.
+ *   3 arguments → two-argument waterfall (`tools/post-execute`): handler(exec, result, next).
+ *                 This one genuinely differs — `post-execute` receives the tool's result as
+ *                 well — and getting it wrong passes `next` where `result` belongs, which
+ *                 surfaces as "next is not a function" from inside the handler.
+ *
+ * @param {object} ctx - the stand-in context.
+ * @param {string} name - event name.
+ * @param {...any} rest - handler arguments, plus the innermost `next()` value when the
+ *   event is a waterfall.
+ * @returns {Promise<any>} the outermost listener's return value.
+ */
+async function fire(ctx, name, ...rest) {
+  const entries = ctx.listeners.get(name) || []
+  if (entries.length === 0) return undefined
+
+  const waterfall = rest.length > 1
+  const args = waterfall ? rest.slice(0, -1) : rest
+  if (!waterfall) {
+    let last
+    for (const entry of entries) last = await entry.handler(...args)
+    return last
+  }
+
+  const downstream = rest[rest.length - 1]
+  let index = 0
+  const next = async () => {
+    if (index >= entries.length) return downstream
+    const entry = entries[index]
+    index += 1
+    return entry.handler(...args, next)
+  }
+  return next()
+}
+
+/** A plan with one verified criterion, so the gate can be driven both ways. */
+function verifiedPlan(sessionId) {
+  let delivery = domain.emptyDelivery(sessionId)
+  for (const [op, payload] of [
+    ['addAcceptance', { description: 'loading / empty / error 三态都有' }],
+    ['addEvidence', { summary: 'pnpm test passed', kind: 'test', acceptance: ['AC-001'] }],
+    ['setAcceptanceStatus', { id: 'AC-001', status: 'verified' }],
+    ['reconcile', { goalId: GOAL.id, goalRevision: GOAL.revision }],
+  ]) {
+    delivery = domain.applyDeliveryOp(delivery, op, payload, { at: AT }).delivery
+  }
+  return delivery
+}
+
+/** An agent stand-in with the public surface the enforcement actually reads. */
+function fakeAgent(sessionId, events = []) {
+  const steered = []
+  return {
+    id: sessionId,
+    steered,
+    status: 'running',
+    session: {
+      id: sessionId,
+      header: { cwd: null },
+      snapshotEvents: () => events,
+    },
+    steer(message) { steered.push(message) },
+  }
+}
+
+try {
+  console.log('goal-enforce: the service probe survives a throwing context')
+  {
+    const ctx = fakeCtx({}, ['webServer'])
+    // The whole reason `service()` exists: a bare `ctx.goals` would throw here.
+    let threw = null
+    try {
+      void ctx.goals
+    } catch (error) {
+      threw = error
+    }
+    check('the stand-in really does throw for an undeclared service', threw !== null, 'the proxy is too permissive')
+    eq('service() returns undefined instead of throwing', enforce.service(ctx, 'goals'), undefined)
+    const resolved = enforce.liveGoalFor(ctx, fakeAgent('s1'))
+    eq('liveGoalFor reports the service as unavailable', resolved.state, 'unavailable')
+    check('and names the missing package', /dsh-goal/.test(resolved.reason))
+  }
+  {
+    const goals = { get: () => GOAL }
+    const ctx = fakeCtx({ goals }, ['webServer'])
+    const resolved = enforce.liveGoalFor(ctx, fakeAgent('s1'))
+    eq('a mounted goal service resolves', resolved.state, 'ok')
+    eq('and returns the view', resolved.goal.id, GOAL.id)
+  }
+  {
+    // A goal read that throws is a READ FAILURE, not "no goal". Collapsing them would let
+    // the page say "you have no goal" when the truth is "we could not look".
+    const goals = { get: () => { throw new Error('goal replay failed at session event 41') } }
+    const ctx = fakeCtx({ goals }, ['webServer'])
+    const resolved = enforce.liveGoalFor(ctx, fakeAgent('s1'))
+    eq('a throwing read is reported as unavailable', resolved.state, 'unavailable')
+    check('and carries the real reason', /replay failed/.test(resolved.reason))
+  }
+
+  console.log('goal-enforce: preflight orients the model without dumping the artifact')
+
+  /** A plan with the fields a preflight block reads. */
+  function orientablePlan(sessionId) {
+    let delivery = domain.emptyDelivery(sessionId)
+    for (const [op, payload] of [
+      ['addAcceptance', { description: 'loading / empty / error 三态都有' }],
+      ['addTask', { title: '接入 /api/tasks' }],
+      ['setFocus', { focus: '完成 API 接入并验证三态' }],
+      ['setNext', { next: ['接入 /api/tasks', '运行测试'] }],
+      ['reconcile', { goalId: GOAL.id, goalRevision: GOAL.revision }],
+    ]) {
+      delivery = domain.applyDeliveryOp(delivery, op, payload, { at: AT }).delivery
+    }
+    return delivery
+  }
+
+  {
+    const paths = freshPaths()
+    const sessionId = 'sess-preflight'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+
+    eq('the step still enters', decision.kind, 'enter')
+    eq('and exactly one message was appended', decision.messages.length, 1)
+    const injected = decision.messages[0]
+    const text = injected.content[0].text
+    check('the block is marked as goal state', text.startsWith('<goal_state>') && text.endsWith('</goal_state>'))
+    check('it carries the objective', text.includes(GOAL.objective))
+    check('it carries the acceptance tally', /验收标准：0\/1/.test(text), text)
+    check('it carries the current focus', text.includes('完成 API 接入并验证三态'))
+    check('it carries the next action', text.includes('接入 /api/tasks'))
+    check('it states whether completion would pass', text.includes('完成门：现在还不能标记完成'))
+    check('it names the tool that writes the plan', text.includes('goal_delivery'))
+    // Attribution: a plugin message must never be stamped as the user.
+    eq('it is attributed to the plugin, never the user', injected.source.kind, 'plugin')
+    eq('with the plugin name', injected.source.plugin, 'dsh-luzzy-page')
+    // §82/§83: orientation is a COMPACT block, never the artifact.
+    const bytes = Buffer.byteLength(text, 'utf8')
+    check(`the block stays compact (${bytes} bytes)`, bytes < 900, `${bytes} bytes`)
+    check('and it is NOT the markdown artifact', !text.includes('## 1. 预期目标') && !text.includes('## 13. 变更记录'))
+    eq('the preflight was counted', enforcement.stats().preflight, 1)
+    enforce.resetCounters()
+  }
+  {
+    // §13: a trivial turn still READS. There is no "skip because nothing happened" branch —
+    // the control is the step interval, not a judgement about the user's request.
+    const paths = freshPaths()
+    const sessionId = 'sess-trivial'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId, []), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    eq('a turn that has produced nothing is still oriented', decision.messages.length, 1)
+    eq('and counted', enforcement.stats().preflight, 1)
+    enforce.resetCounters()
+  }
+  {
+    // The step interval is the token control: a long turn must not re-inject every step.
+    const paths = freshPaths()
+    const sessionId = 'sess-interval'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: { preflightEverySteps: 6 } })
+    const agent = fakeAgent(sessionId)
+    let injections = 0
+    for (let step = 1; step <= 12; step += 1) {
+      const decision = await fire(ctx, 'agent/pre-step',
+        { agent, messages: [], turn: 1, step, signal: {} },
+        { kind: 'enter', messages: [] })
+      injections += decision.messages.length
+    }
+    check(`a 12-step turn injects a bounded number of times (${injections})`, injections >= 1 && injections <= 3, `injections=${injections}`)
+    check('and not once per step', injections < 12)
+    enforce.resetCounters()
+  }
+  {
+    // No live goal → nothing to orient. §6 forbids creating a goal for ordinary requests,
+    // and injecting "you have no goal" into every conversation is pure noise.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent('sess-nogoal'), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    eq('a session with no goal is not oriented', decision.messages.length, 0)
+    eq('and the miss is counted', enforcement.stats().preflightMiss, 1)
+    enforce.resetCounters()
+  }
+  {
+    // An unreadable plan is a MISS, not a refusal: the gate is the fail-closed surface, and
+    // blocking a step the model could otherwise work in would be the wrong trade.
+    const paths = freshPaths()
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    mkdirSync(paths.dir, { recursive: true })
+    writeFileSync(store.sessionFile(paths, 'sess-broken-pre'), '{ broken', 'utf8')
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent('sess-broken-pre'), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    eq('an unreadable plan does not block the step', decision.kind, 'enter')
+    eq('and nothing is injected', decision.messages.length, 0)
+    eq('but the miss is recorded', enforcement.stats().preflightMiss, 1)
+    enforce.resetCounters()
+  }
+  {
+    // A downstream listener already rejected the step: injecting into a rejected decision
+    // would be incoherent, and the brief's pre-step contract has no messages on `reject`.
+    const paths = freshPaths()
+    const sessionId = 'sess-reject'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'reject' })
+    eq('a rejected step is passed through unchanged', decision.kind, 'reject')
+    eq('with nothing injected', decision.messages, undefined)
+    enforce.resetCounters()
+  }
+  {
+    // The injected block must survive a real round trip through the JSON the session log
+    // stores: a message carrying a non-serializable value fails at the append site.
+    const paths = freshPaths()
+    const sessionId = 'sess-serial'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    const roundTripped = JSON.parse(JSON.stringify(decision.messages[0]))
+    eq('the message survives JSON serialization', roundTripped.content[0].text, decision.messages[0].content[0].text)
+    eq('and keeps its source', roundTripped.source.kind, 'plugin')
+    enforce.resetCounters()
+  }
+  {
+    // With the preflight off, no listener is installed at all.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: { preflight: false } })
+    eq('with the preflight off nothing is installed', (ctx.listeners.get('agent/pre-step') || []).length, 0)
+    enforce.resetCounters()
+  }
+  {
+    // The renderer itself, driven directly: a goal with everything verified must say so.
+    const ready = verifiedPlan('sess-ready')
+    const text = enforce.renderPreflight(ready, GOAL, { artifactPath: '.agent/goal.md' })
+    check('a satisfied plan reports completion is possible', text.includes('可以调用 update_goal(action=complete)'), text)
+    check('and points at the artifact only as a pointer', text.includes('完整计划（需要时再读）：.agent/goal.md'))
+  }
+  {
+    // No acceptance criteria: the block must say that FIRST, because it is the thing that
+    // makes "done" undecidable.
+    const bare = domain.emptyDelivery('sess-bare')
+    const text = enforce.renderPreflight(bare, GOAL, {})
+    check('an undefined acceptance set is called out', text.includes('还没有定义'), text)
+    check('and the gate refuses', text.includes('不能标记完成'))
+  }
+  {
+    // Open blockers and pending proposals must both reach the block — they change what the
+    // model should do next, which is the whole test for whether a line belongs here.
+    let plan = orientablePlan('sess-attn')
+    plan = domain.applyDeliveryOp(plan, 'addBlocker', { code: 'awaiting-api', message: '等确认空数据返回码' }, { at: AT }).delivery
+    plan = domain.applyDeliveryOp(plan, 'proposeScope', { included: ['dashboard'] }, { at: AT }).delivery
+    const text = enforce.renderPreflight(plan, GOAL, {})
+    check('an open blocker is named', text.includes('awaiting-api'))
+    check('a pending proposal warns against self-approval', text.includes('不要自己改目标或范围'))
+  }
+
+  console.log('goal-enforce: a long task with no goal gets nudged, a chat does not (AC-001)')
+
+  /** A real event log describing a turn that wrote a file. */
+  const WROTE = [
+    { type: 'turn/start', data: { turn: 1 } },
+    { type: 'tool/call', data: { callId: 'c1', name: 'write' } },
+    { type: 'tool/result', data: { message: { id: 'c1' } } },
+  ]
+  /** A real event log describing a turn that only read things. */
+  const READ_ONLY = [
+    { type: 'turn/start', data: { turn: 1 } },
+    { type: 'tool/call', data: { callId: 'c1', name: 'read' } },
+    { type: 'tool/result', data: { message: { id: 'c1' } } },
+  ]
+
+  {
+    // The nudge does NOT create a goal. §6 forbids that for ordinary requests, and the
+    // harness cannot tell a refactor from "帮我解释一下 Promise" — only the model can.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent('sess-nudge', WROTE), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    eq('real work with no goal is nudged', decision.messages.length, 1)
+    const text = decision.messages[0].content[0].text
+    check('the nudge names create_goal', text.includes('create_goal'))
+    check('and asks for acceptance criteria', text.includes('验收标准'))
+    check('and explicitly permits ignoring it', text.includes('忽略这条'))
+    // The distinction that matters: it reports an OBSERVATION, it does not assert intent.
+    check('it reports what was observed', text.includes('工具调用'))
+    eq('it is attributed to the plugin', decision.messages[0].source.kind, 'plugin')
+    eq('and counted', enforcement.stats().goalNudged, 1)
+    enforce.resetCounters()
+  }
+  {
+    // THE most important assertion here: an ordinary conversation must not be nudged into
+    // creating a goal. §6 names this failure directly.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent('sess-chat', READ_ONLY), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    eq('a read-only turn is never nudged', decision.messages.length, 0)
+    eq('and nothing is counted', enforcement.stats().goalNudged, 0)
+    enforce.resetCounters()
+  }
+  {
+    // A turn that has not called any tool yet (the very first step of a conversation) must
+    // not be nudged either — there is nothing observed to report.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent('sess-empty', []), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    eq('a turn with no tool calls is never nudged', decision.messages.length, 0)
+    enforce.resetCounters()
+  }
+  {
+    // Once per session. A nudge that repeats every step is the token waste §83 warns about,
+    // and a model that declined the first one has its reasons.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const agent = fakeAgent('sess-once', WROTE)
+    let nudges = 0
+    for (let turn = 1; turn <= 8; turn += 1) {
+      const decision = await fire(ctx, 'agent/pre-step',
+        { agent, messages: [], turn, step: 1, signal: {} }, { kind: 'enter', messages: [] })
+      nudges += decision.messages.length
+    }
+    eq('eight turns produce exactly one nudge', nudges, 1)
+    eq('and the counter agrees', enforcement.stats().goalNudged, 1)
+    enforce.resetCounters()
+  }
+  {
+    // A session that DOES have a goal must never be nudged — it is already oriented.
+    const paths = freshPaths()
+    const sessionId = 'sess-has-goal'
+    store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId, WROTE), messages: [], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [] })
+    eq('a session with a goal is oriented, not nudged', decision.messages.length, 1)
+    check('and the message is the goal state, not the hint', decision.messages[0].content[0].text.startsWith('<goal_state>'))
+    eq('no nudge counted', enforcement.stats().goalNudged, 0)
+    enforce.resetCounters()
+  }
+  {
+    // With the preflight off the nudge is off too — it is part of the same layer.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: { preflight: false } })
+    eq('preflight off means no listeners at all', (ctx.listeners.get('agent/pre-step') || []).length, 0)
+    enforce.resetCounters()
+  }
+  {
+    // The renderer itself, driven directly.
+    const text = enforce.renderGoalNudge({ toolCalls: 7 })
+    check('the nudge reports the real tool count', text.includes('7'))
+    check('and is a hint, not an order', !/你必须|立即/.test(text))
+  }
+
+  console.log('goal-enforce: a refusal names WHY (evidence coverage, §86/§87)')
+
+  {
+    // "Completion was refused" and "completion was refused because evidence was missing" are
+    // different facts with different fixes — one is work in progress, the other is a process
+    // gap. §86/§87 name evidence coverage as one of the five things worth watching, so the
+    // counter has to distinguish them rather than lumping every refusal together.
+    const paths = freshPaths()
+    const sessionId = 'sess-evidence'
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+
+    // A plan whose only criterion is unverified: refused, but NOT for missing evidence.
+    let plan = domain.emptyDelivery(sessionId)
+    plan = domain.applyDeliveryOp(plan, 'addAcceptance', { description: '还没有验证' }, { at: AT }).delivery
+    store.writeDeliveryOverlay(paths, sessionId, plan, 0)
+    await fire(ctx, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete' }, agent: fakeAgent(sessionId) },
+      { kind: 'allow' })
+    eq('an unverified criterion is refused', enforcement.stats().completionRejected, 1)
+    eq('but it is not counted as missing evidence', enforcement.stats().evidenceMissing, 0)
+    enforce.resetCounters()
+  }
+  {
+    // Now the shape that IS a process gap: the criterion is marked verified but carries no
+    // evidence. The domain refuses that mutation outright (GOAL_MISSING_EVIDENCE), so the
+    // state can only be reached by writing the document directly — which is exactly why the
+    // gate must ALSO check it rather than trusting the mutation path.
+    const paths = freshPaths()
+    const sessionId = 'sess-no-evidence'
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+
+    const plan = domain.emptyDelivery(sessionId)
+    plan.acceptance.push({ id: 'AC-001', description: '声称已验证', status: 'verified', mandatory: true, evidence: [], verifiedAt: AT })
+    store.writeDeliveryOverlay(paths, sessionId, plan, 0)
+
+    const decision = await fire(ctx, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete' }, agent: fakeAgent(sessionId) },
+      { kind: 'allow' })
+    eq('a verified-without-evidence criterion still refuses completion', decision.kind, 'deny')
+    eq('and it IS counted as missing evidence', enforcement.stats().evidenceMissing, 1)
+    eq('alongside the refusal', enforcement.stats().completionRejected, 1)
+    check('the refusal names the criterion', decision.reason.includes('AC-001'), decision.reason)
+    enforce.resetCounters()
+  }
+  {
+    // A satisfied plan increments neither counter.
+    const paths = freshPaths()
+    const sessionId = 'sess-satisfied'
+    store.writeDeliveryOverlay(paths, sessionId, verifiedPlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete' }, agent: fakeAgent(sessionId) },
+      { kind: 'allow' })
+    eq('a satisfied plan is allowed', decision.kind, 'allow')
+    eq('and accepted', enforcement.stats().completionAccepted, 1)
+    eq('with no refusal counted', enforcement.stats().completionRejected, 0)
+    eq('and no evidence gap', enforcement.stats().evidenceMissing, 0)
+    enforce.resetCounters()
+  }
+  {
+    // §87's point: the counters are the answer to "is the agent actually using the goal".
+    // Assert the whole set exists, so a future metric cannot be silently dropped.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const observed = enforcement.stats()
+    const required = [
+      'preflight', 'preflightMiss', 'reconcileOffered', 'reconcileSkipped', 'goalNudged',
+      'completionRejected', 'completionAccepted', 'evidenceMissing', 'revisionConflict', 'driftDetected',
+    ]
+    for (const key of required) {
+      check(`stats exposes "${key}"`, Object.prototype.hasOwnProperty.call(observed, key), JSON.stringify(observed))
+    }
+    enforce.resetCounters()
+  }
+
+  console.log('goal-enforce: the completion gate blocks the CALL, not just the report')
+  {
+    const paths = freshPaths()
+    const sessionId = 'sess-refuse'
+    // A plan that is NOT finished: one criterion, no evidence, still pending.
+    let plan = domain.emptyDelivery(sessionId)
+    plan = domain.applyDeliveryOp(plan, 'addAcceptance', { description: '三态都有' }, { at: AT }).delivery
+    plan = domain.applyDeliveryOp(plan, 'addTask', { title: '接 API' }, { at: AT }).delivery
+    store.writeDeliveryOverlay(paths, sessionId, plan, 0)
+
+    const agent = fakeAgent(sessionId)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+
+    const decision = await fire(ctx, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete', goal_id: GOAL.id, revision: GOAL.revision }, agent }, { kind: 'allow' })
+
+    eq('a premature complete is DENIED', decision.kind, 'deny')
+    check('and the reason names the code', decision.reason.includes('GOAL_COMPLETION_REJECTED'), decision.reason)
+    check('and lists the unverified criterion', decision.reason.includes('AC-001'))
+    check('and lists the remaining work', decision.reason.includes('T-001'))
+    check('and tells the model what to do next', /补齐之后再次调用/.test(decision.reason))
+  }
+  {
+    const paths = freshPaths()
+    const sessionId = 'sess-allow'
+    store.writeDeliveryOverlay(paths, sessionId, verifiedPlan(sessionId), 0)
+    const agent = fakeAgent(sessionId)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+
+    const decision = await fire(ctx, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete', goal_id: GOAL.id, revision: GOAL.revision }, agent }, { kind: 'allow' })
+
+    eq('a satisfied goal is allowed through', decision.kind, 'allow')
+    eq('and the gate counted the acceptance', enforcement.stats().completionAccepted, 1)
+  }
+  {
+    // Every other action must pass untouched. A gate that also blocked `edit` would break
+    // the very tool the model needs to fix an unfinished plan.
+    const paths = freshPaths()
+    const sessionId = 'sess-other'
+    store.writeDeliveryOverlay(paths, sessionId, domain.emptyDelivery(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    for (const action of ['edit', 'pause', 'resume', 'blocked']) {
+      const decision = await fire(ctx, 'tools/pre-execute',
+        { name: 'update_goal', arguments: { action }, agent: fakeAgent(sessionId) }, { kind: 'allow' })
+      eq(`action "${action}" is not gated`, decision.kind, 'allow')
+    }
+    for (const name of ['get_goal', 'goal_delivery', 'create_goal']) {
+      const decision = await fire(ctx, 'tools/pre-execute',
+        { name, arguments: {}, agent: fakeAgent(sessionId) }, { kind: 'allow' })
+      eq(`tool "${name}" is not gated`, decision.kind, 'allow')
+    }
+  }
+  {
+    // FAIL CLOSED. If the plan cannot be read, completion must be refused — "I could not
+    // check" must never mean "go ahead", which is the entire reason the gate exists.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    // No overlay was ever written for this session, so `readDeliveryOverlay` returns an
+    // empty plan — which the gate refuses. To test the UNREADABLE path, corrupt the file.
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    mkdirSync(paths.dir, { recursive: true })
+    writeFileSync(store.sessionFile(paths, 'sess-broken'), '{ broken', 'utf8')
+
+    const decision = await fire(ctx, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete' }, agent: fakeAgent('sess-broken') }, { kind: 'allow' })
+    eq('an unreadable plan refuses completion', decision.kind, 'deny')
+    check('and says the state could not be read', /读不出来/.test(decision.reason), decision.reason)
+    eq('and counted the refusal', enforcement.stats().completionRejected, 1)
+  }
+  {
+    // A downstream listener already denied the call: the gate must not override it.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete' }, agent: fakeAgent('s1') }, { kind: 'deny', reason: 'sandbox says no' })
+    eq('an existing denial is passed through unchanged', decision.kind, 'deny')
+    eq('and its reason is preserved', decision.reason, 'sandbox says no')
+  }
+  {
+    // The block is switchable. With it off, no gate listener is installed at all — the
+    // cheapest correct behaviour, and it means a deployment that does not want the gate pays
+    // nothing for it. Asserting on the listener set rather than on a decision, because with
+    // the gate off there IS no decision to inspect.
+    const paths = freshPaths()
+    const withGate = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(withGate, { paths, options: {} })
+    check('with the gate on, a pre-execute listener is installed',
+      (withGate.listeners.get('tools/pre-execute') || []).length === 1)
+
+    const withoutGate = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(withoutGate, { paths, options: { blockCompletion: false } })
+    eq('with the gate off, nothing is installed', (withoutGate.listeners.get('tools/pre-execute') || []).length, 0)
+    const decision = await fire(withoutGate, 'tools/pre-execute',
+      { name: 'update_goal', arguments: { action: 'complete' }, agent: fakeAgent('s1') }, { kind: 'allow' })
+    eq('so a complete passes straight through', decision, undefined)
+  }
+
+  console.log('goal-enforce: get_goal gains the plan without losing the goal')
+  {
+    const paths = freshPaths()
+    const sessionId = 'sess-augment'
+    store.writeDeliveryOverlay(paths, sessionId, verifiedPlan(sessionId), 0)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+
+    const original = { goal: { id: GOAL.id, revision: GOAL.revision, objective: GOAL.objective, phase: 'active' }, activation: 'armed' }
+    const decision = await fire(ctx, 'tools/post-execute',
+      { name: 'get_goal', arguments: {}, agent: fakeAgent(sessionId) },
+      { isError: false, content: [{ type: 'text', text: JSON.stringify(original) }] },
+      { kind: 'accept' })
+
+    eq('the result is still an accept', decision.kind, 'accept')
+    const text = decision.content.map((part) => part.text).join('')
+    const parsed = JSON.parse(text)
+    eq('the original goal block is preserved', parsed.goal.id, GOAL.id)
+    eq('the activation is preserved', parsed.activation, 'armed')
+    check('and a delivery block was added', parsed.delivery !== undefined)
+    eq('carrying the acceptance tally', parsed.delivery.acceptance.verified, 1)
+    eq('and the health state', typeof parsed.delivery.health, 'string')
+    eq('and whether completion would pass', parsed.delivery.can_complete, true)
+  }
+  {
+    // Content the hook does not understand must be left ALONE. Wrapping arbitrary text
+    // would corrupt a tool result the model is relying on.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const decision = await fire(ctx, 'tools/post-execute',
+      { name: 'get_goal', arguments: {}, agent: fakeAgent('s1') },
+      { isError: false, content: [{ type: 'text', text: 'this is not json' }] },
+      { kind: 'accept' })
+    eq('unparsable content is not rewritten', Object.hasOwn(decision, 'content'), false)
+  }
+  {
+    // Other tools and agent-less calls must be untouched.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const other = await fire(ctx, 'tools/post-execute',
+      { name: 'read', arguments: {}, agent: fakeAgent('s1') },
+      { isError: false, content: [{ type: 'text', text: 'file body' }] },
+      { kind: 'accept' })
+    eq('another tool is not touched', Object.hasOwn(other, 'content'), false)
+    const agentless = await fire(ctx, 'tools/post-execute',
+      { name: 'get_goal', arguments: {} },
+      { isError: false, content: [{ type: 'text', text: JSON.stringify({ goal: null }) }] },
+      { kind: 'accept' })
+    eq('an agent-less call is not touched', Object.hasOwn(agentless, 'content'), false)
+  }
+
+  console.log('goal-enforce: the commit barrier steers, because a return value cannot')
+  {
+    // This is the fact the whole design turns on: `dsh-agent-loop` DISCARDS the return value
+    // of `agent/turn-stopping`, so the only way to keep a turn open is to put something in
+    // the next-step inbox. The assertion is therefore on `steer` having been called.
+    const paths = freshPaths()
+    const sessionId = 'sess-steer'
+    let plan = domain.emptyDelivery(sessionId)
+    plan = domain.applyDeliveryOp(plan, 'addAcceptance', { description: '三态都有' }, { at: AT }).delivery
+    plan = domain.applyDeliveryOp(plan, 'addTask', { title: '接 API' }, { at: AT }).delivery
+    plan = domain.applyDeliveryOp(plan, 'setTaskStatus', { id: 'T-001', status: 'in_progress' }, { at: AT }).delivery
+    store.writeDeliveryOverlay(paths, sessionId, plan, 0)
+
+    // The agent's turn wrote a file, so real work happened.
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'write' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+    ]
+    const agent = fakeAgent(sessionId, events)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: { minReconcileIntervalMs: 0 } })
+
+    await fire(ctx, 'agent/turn-stopping', { agent, turn: 1, signal: {} })
+    eq('a turn that changed the workspace is asked to reconcile', agent.steered.length, 1)
+    eq('via steer, the only mechanism that opens a step', typeof agent.steered[0].content[0].text, 'string')
+    const message = agent.steered[0]
+    check('the request names the goal', message.content[0].text.includes(GOAL.objective))
+    check('and carries the reconciliation marker', message.content[0].text.includes('<goal_reconciliation>'))
+    check('and tells the model not to invent evidence', /不要为了通过检查而编造证据/.test(message.content[0].text))
+    // Attribution: a plugin message must NEVER be stamped as the user. A `{kind:'user'}`
+    // source clears job wake budgets and resets repeat-reminder chains.
+    eq('and is attributed to the plugin, never to the user', message.source.kind, 'plugin')
+    eq('with the plugin name', message.source.plugin, 'dsh-luzzy-page')
+    eq('the barrier counted an offer', enforcement.stats().reconcileOffered, 1)
+  }
+  {
+    // A turn that only READ did no work, and must not be asked to rewrite its plan. This is
+    // the trivial-turn exemption.
+    const paths = freshPaths()
+    const sessionId = 'sess-readonly'
+    store.writeDeliveryOverlay(paths, sessionId, verifiedPlan(sessionId), 0)
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'read' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+    ]
+    const agent = fakeAgent(sessionId, events)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: { minReconcileIntervalMs: 0 } })
+    await fire(ctx, 'agent/turn-stopping', { agent, turn: 1, signal: {} })
+    eq('a read-only turn is not asked to reconcile', agent.steered.length, 0)
+    check('and the skip is counted', enforcement.stats().reconcileSkipped >= 1)
+  }
+  {
+    // A FAILED write changed nothing, so it is not progress.
+    const paths = freshPaths()
+    const sessionId = 'sess-failed'
+    store.writeDeliveryOverlay(paths, sessionId, verifiedPlan(sessionId), 0)
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'write' } },
+      { type: 'tool/result', data: { error: { name: 'X', code: 'E' }, message: { id: 'c1' } } },
+    ]
+    const agent = fakeAgent(sessionId, events)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: { minReconcileIntervalMs: 0 } })
+    await fire(ctx, 'agent/turn-stopping', { agent, turn: 1, signal: {} })
+    eq('a failed write is not progress', agent.steered.length, 0)
+  }
+  {
+    // One steer per turn, and a hard per-session ceiling. Without the first the steer would
+    // open a step that trips the barrier again, burning rounds on bookkeeping.
+    const paths = freshPaths()
+    const sessionId = 'sess-bounded'
+    let plan = domain.emptyDelivery(sessionId)
+    plan = domain.applyDeliveryOp(plan, 'addTask', { title: 'work', status: 'in_progress' }, { at: AT }).delivery
+    store.writeDeliveryOverlay(paths, sessionId, plan, 0)
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'write' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+    ]
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: { minReconcileIntervalMs: 0, maxReconciliations: 2 } })
+    for (let turn = 1; turn <= 6; turn += 1) {
+      const agent = fakeAgent(sessionId, events)
+      await fire(ctx, 'agent/turn-stopping', { agent, turn, signal: {} })
+      // Each iteration is a NEW turn but the same session, so the session ceiling applies.
+    }
+    const offered = enforcement.stats().reconcileOffered
+    check('the session ceiling is respected', offered <= 2, `offered ${offered}`)
+    check('and the barrier reports how often it declined', enforcement.stats().reconcileSkipped > 0)
+  }
+  {
+    // With the barrier off entirely, nothing is ever steered.
+    const paths = freshPaths()
+    const sessionId = 'sess-off'
+    store.writeDeliveryOverlay(paths, sessionId, verifiedPlan(sessionId), 0)
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'write' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+    ]
+    const agent = fakeAgent(sessionId, events)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: { reconcile: false } })
+    await fire(ctx, 'agent/turn-stopping', { agent, turn: 1, signal: {} })
+    eq('with the barrier off nothing is steered', agent.steered.length, 0)
+  }
+
+  console.log('goal-enforce: turn observation reads the log, not a counter')
+  {
+    // Events before the last turn/start must not count: a counter kept across turns would
+    // drift after a compaction, and the log is the authority.
+    const events = [
+      { type: 'tool/call', data: { callId: 'old', name: 'write' } },
+      { type: 'turn/start', data: { turn: 2 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'read' } },
+    ]
+    const observed = enforce.observeTurn(fakeAgent('s', events))
+    eq('an earlier turn\'s write is not counted', observed.wroteFiles, false)
+    eq('and the read-only turn is not progress', observed.changed, false)
+    eq('but the call is still counted', observed.toolCalls, 1)
+  }
+  {
+    const observed = enforce.observeTurn({ session: { snapshotEvents: () => { throw new Error('gone') } } })
+    eq('a broken session read degrades to "no change"', observed.changed, false)
+    const missing = enforce.observeTurn({})
+    eq('a missing session degrades too', observed.changed, false)
+  }
+  {
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'bash' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+      { type: 'tool/call', data: { callId: 'c2', name: 'edit' } },
+      { type: 'tool/result', data: { message: { id: 'c2' } } },
+    ]
+    const observed = enforce.observeTurn(fakeAgent('s', events))
+    eq('a command is recognised', observed.ranCommand, true)
+    eq('and an edit', observed.wroteFiles, true)
+    eq('with both calls counted', observed.toolCalls, 2)
+  }
+
+  console.log('goal-enforce: delivery summary is compact and honest')
+  {
+    const sessionId = 'sess-summary'
+    const plan = verifiedPlan(sessionId)
+    const block = enforce.deliverySummary(plan, GOAL, { artifactPath: '.agent/goal.md' })
+    eq('it reports a health state', typeof block.health, 'string')
+    eq('it reports the tally', block.acceptance.verified, 1)
+    check('it states whether completion is possible', typeof block.can_complete, 'boolean')
+    eq('it names the artifact when one is enabled', block.artifact.path, '.agent/goal.md')
+    // Compactness is a requirement, not a nicety: this rides on EVERY get_goal call.
+    const bytes = Buffer.byteLength(JSON.stringify(block))
+    check(`the block stays small (${bytes} bytes)`, bytes < 600, `${bytes} bytes`)
+    check('and carries no full document', block.acceptance.total !== undefined && block.acceptance.evidence === undefined)
+  }
+  {
+    const sessionId = 'sess-summary2'
+    let plan = domain.emptyDelivery(sessionId)
+    plan = domain.applyDeliveryOp(plan, 'addAcceptance', { description: 'x' }, { at: AT }).delivery
+    const block = enforce.deliverySummary(plan, GOAL, {})
+    eq('an unfinished plan reports completion as blocked', block.can_complete, false)
+    check('and says why', Array.isArray(block.completion_blocked_by) && block.completion_blocked_by.length > 0)
+    eq('with no artifact, the field is null rather than absent', block.artifact, null)
+  }
+} finally {
+  for (const root of tempRoots) {
+    try {
+      rmSync(root, { recursive: true, force: true })
+    } catch {
+      // best effort
+    }
+  }
+}
+
+console.log()
+if (failures > 0) {
+  console.log(`FAIL — ${failures} of ${checks} assertion(s)`)
+  process.exit(1)
+}
+console.log(`PASS — ${checks} assertions (goal-enforce)`)

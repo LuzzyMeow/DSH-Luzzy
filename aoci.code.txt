@@ -1,0 +1,123 @@
+#AOCI-CODE-VOLUME: 1
+
+===C:/Users/Administrator/Desktop/DSH Plugin/===
+.gitattributes[CG3T]: F:让检出行尾恒为 LF，使跨平台字节一致 | R:code:aoci.code.txt | A:- | S:AOCI 按原始字节建基线，Windows 默认 autocrlf 会把整棵树判成 stale
+.gitignore[FG5T]: F:声明仓库忽略边界：参考区、构建产物、临时日志、凭据、工具写前保护副本 | R:code:.gitattributes | A:- | S:reference/ 是三个上游克隆共 1.42GB/29035 文件必须排除；AOCI 认知资产绝不可写入忽略清单，被忽略会被静默跳过
+AGENTS.md[SC9L]: F:本工作区的开发纪律与已证伪做法清单（五节 + §5.1–5.29） | R:code:docs/STATUS-LuzzyPage工作节点.md,code:reference/README.md | A:- | S:§五每条都由真实崩溃换来而非推测，改前必读；§一 是硬约束：前端须复用 reference/lobehub 既定设计；§5.27–5.29 是同一病根的三次教训——没读够参考就动手，以及合成事件证明不了能操作；文件受 65536 字节预算约束，超出会把尾部 AOCI 区块静默截半，编辑后必须核对两个 marker 都在
+
+===C:/Users/Administrator/Desktop/DSH/docs/===
+01-插件模型与写法.md[SG6M]: F:讲清插件的 Cordis 五概念、四种形态、四个导出与工具 DSL | R:code:docs/README.md,code:docs/02-组装安装与客户端插件.md | A:- | S:「DSH 没有特权内核」是理解一切插件能力的前提——模型适配器与 agent 主循环本身也是插件
+02-组装安装与客户端插件.md[SG6M]: F:讲清 profile/bundle/patch 三层组装顺序、安装分发，以及 §7 Web UI 插槽插件入口 | R:code:docs/01-插件模型与写法.md,code:docs/05-前端技术栈与客户端插件机制.md | A:- | S:§7 是写客户端插件前的必读入口；patch 按 id 替换整行 config 而非深合并，覆盖时须重述该行每个键
+03-注意事项与来源核验.md[SQ6S]: F:踩坑清单、安全边界、版本兼容与本机核验记录 | R:code:docs/README.md | A:- | S:「本机核验」与「官方文档声明」必须分开表述；模块解析失败只记日志不崩溃，是「插件没生效」的最常见原因
+04-服务与运行时.md[SG7M]: F:列出全部核心服务（ctx 键）、系统提示词组装、会话重建、模型调用与工具执行流水线 | R:code:docs/01-插件模型与写法.md | A:- | S:section 文本会被 renderPrompt 重扫而变量值不会——这条区别是「用户提示词必须走变量」的全部依据；签名以官方生成的 Cordis API 目录为准
+05-前端技术栈与客户端插件机制.md[SG7M]: F:证明前端是 Electron 壳 + Vite/React SPA，给出右侧栏选项卡两步注册与 iframe 方案 | R:code:docs/02-组装安装与客户端插件.md,code:luzzy-page/lib/client.js | A:- | S:直读 0.1.5-rc.2 的包，记录了插槽只准入 React 与「iframe 是唯一稳做法」两条硬边界；Desktop 默认 ordinaryBrowserEnabled=false，进程外探测宿主路由永远只得到 403
+NOTES-B站两期视频笔记.md[SZ4L]: F:两期视频（HanaAgent 作者自述 / QwenPaw 第三方拆解）的字幕重组笔记与公开评论 | R:code:docs/RESEARCH-DSH插件层可行性调研.md | A:- | S:非逐字稿；视频意图与评论都不可当一类来源采信
+README.md[SG5T]: F:调研文档的导航与来源分级摘要 | R:code:docs/01-插件模型与写法.md,code:docs/02-组装安装与客户端插件.md,code:docs/05-前端技术栈与客户端插件机制.md,code:docs/RESEARCH-DSH插件层可行性调研.md | A:- | S:来源分三级——一类官方与本机一手可直接采信，二类第三方仅作交叉验证；结论对应 0.1.5-rc.1，升级后须用 dump-config 复核
+RESEARCH-DSH插件层可行性调研.md[SG7L]: F:对照 AstrBot/HanaAgent/QwenPaw 三家机制，逐条判定 DSH 插件层能实现什么、代价与缺口 | R:code:docs/NOTES-B站两期视频笔记.md | A:- | S:结论带 hook 与代价，不是「能做/不能做」的二元判断
+STATUS-LuzzyPage工作节点.md[SG9L]: F:LuzzyPage 的进度、失败史、下一步与可复用资产清单，是上下文压缩后的接续点 | R:code:AGENTS.md,code:luzzy-page/lib/index.js | A:- | S:接手 LuzzyPage 前必须先读这份；与 AGENTS.md 的分工是「进度 vs 防错」；§十五 记索引与那 16 张截图的人工裁决（附可复现命令与 plan_id）；§十九 记「实时预览＝渲染形态」；§二十 记编辑不了的真凶：点击冒泡到区域自己的模式处理函数，把光标每次重置到位置 0
+
+===C:/Users/Administrator/Desktop/DSH/luzzy-page/===
+README.md[SU5M]: F:LuzzyPage 插件的门面与结构说明，并被「说明」子页在运行时渲染 | R:code:luzzy-page/lib/index.js,code:luzzy-page/tools/build-font-css.py | A:- | S:它同时是运行期素材——字体子集按它采集字形，改文案会使 lib/client.js 里的子集过时，必须重跑 build-font-css.py
+cordis.patch.yml[FV6T]: F:把 dsh-luzzy-page 插件插进 DSH 组合树的那一行 | R:code:luzzy-page/lib/index.js,code:luzzy-page/package.json | A:- | S:id 与 name 之外的键都无效；name 必须同时等于 package.json 的 name 与 bundle 注册 id，三者不一致会让整个 bundle 加载判定失败
+package.json[FV7S]: F:声明插件名、入口与随包分发的文件清单 | R:code:luzzy-page/lib/index.js,code:luzzy-page/cordis.patch.yml | A:- | S:name 必须同时等于 bundle 注册 id 与 cordis.patch.yml 里的 name——三者不一致会让整个 bundle 加载判定失败；files 只含 lib 与 patch
+
+===C:/Users/Administrator/Desktop/DSH/luzzy-page/lib/===
+client.js[OU8L]: F:构建产物：把帧文档、字体子集与客户端半合成为一个可由 DSH 加载的 bundle | R:code:luzzy-page/src/client.js,code:luzzy-page/lib/index.js | A:- | S:绝不手改——唯一写入者是 build-font-css.py，源是 src/client.js；帧文档是模板字符串，未转义反引号或字面反斜杠加 n 会让整个帧白屏；CSS 里的反斜杠转义在模板里会被当八进制解析，必须双写；判据是它的 mtime 必须晚于 src/client.js
+index.js[EG8M]: F:LuzzyPage 宿主半：注册 usage/readme/diag 与预设路由，并在 worker 里安排用量预热 | R:code:luzzy-page/lib/preset-routes.mjs,code:luzzy-page/lib/usage-aggregate.mjs,code:luzzy-page/cordis.patch.yml | A:GET /__luzzy/usage,GET /__luzzy/readme,POST /__luzzy/diag,GET+POST /__luzzy/preset | S:重活必须在 worker 里跑——主线程同步跑会饿死 30s 的 profile admission 通道并使 host-boot 失败（已崩两次）；此文件不热重载，改完必须重启 DSH
+preset-ops.mjs[DB8L]: F:预设子页的宿主操作：读快照、名单增删改、切预设、建会话 | R:code:luzzy-page/lib/preset-store.mjs,code:luzzy-page/lib/preset-routes.mjs | A:- | S:可选服务必须走 ctx.get(name)——ctx.<服务> 对未 inject 的名字会抛异常且 ?. 挡不住，这曾让子页 100% 失败而 4 个套件全绿；建会话必须传 workspaceId 而非 cwd，传 cwd 的会话不进任何工作区因而侧栏不可见
+preset-routes.mjs[EN7M]: F:注册 GET/POST /__luzzy/preset，并区分 400/403/405/409/413/422/500 | R:code:luzzy-page/lib/preset-ops.mjs,code:luzzy-page/lib/index.js | A:GET /__luzzy/preset?sessionId=,POST /__luzzy/preset | S:超限请求要 drain 而不是 destroy，否则客户端拿到 ECONNRESET 而不是 413；isLocalCaller 对读不到地址的请求 fail-OPEN，是沿用插件既有行为
+preset-store.mjs[PD9L]: F:提示词与名单的磁盘真源：读、原子写、归档、按激活智能体解析出要发给模型的文本 | R:code:luzzy-preset/lib/persona.mjs,code:luzzy-page/lib/preset-ops.mjs | A:- | S:与 luzzy-preset/lib/preset-store.mjs 必须逐字节相同（有 parity 测试守）；读取刻意不做缓存——本机实测 200 次等长改写有 144 次 stat 四元组完全相同，缓存会安静地送出旧提示词；激活的智能体被删时回退默认并记 warning
+usage-aggregate.mjs[AP7M]: F:用量聚合门面：把解压与解析交给 worker 线程，主线程只 postMessage | R:code:luzzy-page/lib/usage-worker.mjs,code:luzzy-page/lib/index.js | A:- | S:这是崩溃契约而非性能优化——同步跑曾两次使 DSH 起不来；预热延后 15s 且随插件卸载可取消
+usage-cache.mjs[PZ6M]: F:按文件缓存解析后的用量 attempts，让重启不再重付解压代价 | R:code:luzzy-page/lib/usage-worker.mjs,code:luzzy-page/lib/usage-core.mjs | A:- | S:modelRouting 是 Map，JSON.stringify 会静默把它变成空对象，必须显式转条目数组；解析逻辑一变要 bump CACHE_VERSION；损坏或版本不符只退化成冷启动，绝不退化成错数字
+usage-core.mjs[KP8M]: F:纯聚合核：多帧 zstd 解压、逐条抽取 attempt、按字段求和与分桶 | R:code:luzzy-page/lib/usage-worker.mjs,code:luzzy-page/tools/aggregate-usage.py | A:- | S:同一份用量在日志里记两遍（data.usage 与 stream 末块），朴素相加多算约 1.64 倍，正确口径是最终样本替换流式样本；日志是追加式多帧 zstd，单次解压只解第一帧并静默返回截断结果，必须按魔数逐帧解；不得引入线程或 I/O
+usage-window.mjs[KU7M]: F:把 attempts 排成自然时间窗口序列：日=今天 24 小时、周=本周 7 天、月=本月各周 | R:code:luzzy-page/lib/usage-worker.mjs,code:luzzy-page/tools/test-usage-window.mjs | A:- | S:未到的时段必须是 null 而不是 0——画成 0 会凭空造出一段塌方；月按自然周切不是 ISO 周；纯函数且注入 now，否则边界无法断言
+usage-worker.mjs[AM7S]: F:worker 线程里跑全部昂贵步骤：读日志、走缓存、算三窗口与月度阵列 | R:code:luzzy-page/lib/usage-core.mjs,code:luzzy-page/lib/usage-aggregate.mjs | A:- | S:必须在 worker 里——主线程同步跑（哪怕 setImmediate 分块）会饿死宿主 30 秒的 profile admission 通道并让 host-boot 失败，实测崩过两次
+
+===C:/Users/Administrator/Desktop/DSH/luzzy-page/src/===
+client.js[TQ9L]: F:客户端半与帧文档的唯一手写源，含三个 tab、用量图表与预设子页的单栏 Markdown 编辑器 | R:code:luzzy-page/tools/build-font-css.py,code:luzzy-page/lib/client.js | A:- | S:改完必须重跑 build-font-css.py，运行的是 lib/client.js 这个产物；帧文档是模板字符串，未转义反引号会让帧白屏而构建查不出来；帧内绝不可用原生对话框，它们会夺走窗口焦点；编辑器三模式各只有一个面；模式切换只许绑菜单项——区域自己也带 data-mode，绑到它会吞掉每次点击的光标；回写只在真实编辑时触发
+
+===C:/Users/Administrator/Desktop/DSH/luzzy-page/tools/===
+aggregate-usage.py[XQ5S]: F:离线复算用量，用与内核一致的「替换」语义校验聚合结果 | R:code:luzzy-page/lib/usage-core.mjs | A:- | S:它存在的意义是独立复现内核口径——朴素求和会得到约 1.64 倍的偏大值，两者不一致即说明聚合逻辑漂移
+analyze-readme.cjs[XS3T]: F:统计 README 用了哪些 markdown 特性，用来划定帧内渲染器的实现范围 | R:code:luzzy-page/README.md,code:luzzy-page/src/client.js | A:- | S:帧内没有 markdown 库可用，渲染器范围必须先由这份统计确定再动手
+aoci-loop.mjs[XO3T]: F:驱动本仓的 AOCI 创作循环：取批次、查状态、提交条目 | R:code:luzzy-page/tools/aoci-mcp-client.mjs | A:- | S:批次与候选身份一律原样透传，绝不自行合成；改受管文件后必须重新取批次
+aoci-mcp-client.mjs[XN7S]: F:最小 MCP stdio 客户端，让 AOCI 服务指向本仓库而非全局配置里那个仓库 | R:code:luzzy-page/tools/aoci-loop.mjs | A:- | S:全局 MCP 配置把 repo 写死成另一个项目，所有 aoci 工具都作用在那个仓库上，以 repo 参数另起一个 stdio 服务是唯一不改全局配置的路；CLI 创作对 Volumes v1 不可用，故 MCP 是唯一写入面
+build-font-css.py[XO8M]: F:采集页面用到的非 ASCII 字符、子集化中文字体并内联，生成 lib/client.js | R:code:luzzy-page/src/client.js,code:luzzy-page/lib/client.js | A:- | S:lib/client.js 的唯一写入者，手改产物会被下次构建覆盖；构建后解析一遍外层 bundle，解析不过即非零退出，这是发现帧模板被反引号截断的第一道门；README.md 也在扫描范围内；两个普黑体 TTF 源已从 LuzzyRP 消失，靠 --fallback-font-dir 指向同字体的 WOFF2 兜底，TTF 仍优先
+cdp-driver.mjs[TQ7M]: F:零依赖 CDP 驱动：起 Edge、建目标、真实鼠标与键盘、console 与截图 | R:code:luzzy-page/tools/review-preset-rig.mjs | A:- | S:点击走真实鼠标事件而非 element.click()，否则绕过命中测试会漏掉被遮罩盖住的按钮；teardown 必须走 CDP 关闭，被杀掉的 launcher 不是真正持有 profile 的进程，实测漏 21 个进程
+check-frame-script.mjs[TQ6S]: F:把帧文档里的脚本抽出来单独编译，报出真实行号并打印上下文 | R:code:luzzy-page/src/client.js,code:luzzy-page/tools/scan-frame-backticks.mjs | A:- | S:node --check 查的是外层 bundle，帧是字符串因此帧内语法错误一路通关；缺了这道门，症状只有空白帧
+dump-usage-data.mjs[TV4T]: F:导出真实用量载荷 JSON，供离线预览渲染器使用 | R:code:luzzy-page/tools/render-frame-with-data.mjs | A:- | S:形状必须与宿主路由一致：一次返回三个窗口加月度阵列，客户端自己选窗口
+install-preset.mjs[XI7M]: F:把 LuzzyMode 预设装进本机 DSH home，并校验安装结果 | R:code:luzzy-preset/preset.yml,code:luzzy-preset/lib/persona.mjs | A:- | S:预设是自包含目录，不需要 package.json 或 profile 注册；默认 dry-run，要真装必须显式 --apply；曾把种子误写进预设目录而读取器读的是 store，导致安静回退
+probe-aggregate.mjs[TA5T]: F:在 DSH 之外按宿主的方式跑一次聚合器，用来把故障归因到 worker 或路由 | R:code:luzzy-page/lib/usage-aggregate.mjs | A:- | S:诊断脚本必须在改代码之前跑——先确定聚合器本身是否工作，才谈得上二分
+probe-cache-bench.mjs[TA5S]: F:背靠背建两个聚合器共用同一缓存文件，验证缓存既提速又不改数 | R:code:luzzy-page/lib/usage-cache.mjs | A:- | S:两个实例不共享任何状态，这才等价于一次 DSH 重启；提速与逐位一致要同时成立
+probe-extract-cost.mjs[TA4T]: F:按阶段拆解冷读耗时，判断磁盘缓存能省掉哪一段 | R:code:luzzy-page/lib/usage-cache.mjs | A:- | S:结论是解压加解析占几乎全部耗时，重新分桶几乎不花钱，这决定了缓存该存什么
+probe-first-paint.mjs[TA5S]: F:端到端计时用户真实经历的那条路，含启动预热 | R:code:luzzy-page/lib/usage-aggregate.mjs | A:- | S:必须把预热算进去——预热在 worker 里且延后 15 秒，只测请求会得出与实际首屏不同的结论
+probe-frame-console.mjs[TA6S]: F:在真浏览器里把帧自己的上报、每个 fetch 与未捕获错误画到页面上再截图 | R:code:luzzy-page/tools/cdp-driver.mjs | A:- | S:本机读 DOM 文本做断言恒为假阴性（浏览器降权后启动器先退出），证据只能走像素；曾靠它一次定位到帧内语法错误的行号
+aoci-validate-entries.mjs[XQ4T]: F:提交前按机器字段预算本地校验条目：词典、字段顺序与 token 上限 | R:code:luzzy-page/tools/aoci-loop.mjs | A:- | S:管线对长度违规一次只回一条，20 条批次要跑 20 来回；预算与词典抄自 Guide 与 Meta
+probe-host-warmup-path.mjs[TA4S]: F:用 apply() 的真实装配跑预热路径，验证温启动真的生效 | R:code:luzzy-page/lib/usage-aggregate.mjs,code:luzzy-page/tools/test-host-integration.mjs | A:- | S:集成测试用的是空会话目录，从不以真实体量踩到缓存路径——这份专门补上那一段
+probe-session-usage.py[TA4S]: F:直读真实会话日志，确认用量字段到底长什么样、能否聚合 | R:code:luzzy-page/lib/usage-core.mjs | A:- | S:只读，绝不写会话目录；数据契约靠读真实 zstd 日志确立而不是假设形状
+probe-warmth.mjs[TA3T]: F:分别计时冷读与温读的每个阶段，判断优化该打在哪一段 | R:code:luzzy-page/lib/usage-cache.mjs | A:- | S:分阶段而不是只报总时——总时会掩盖「该缓存的是解压而不是分桶」这个结论
+probe-workspace-attach.mjs[TA5S]: F:读工作区注册表，把某个目录解析到它所属的工作区，并列出各工作区的会话 | R:code:luzzy-page/lib/preset-ops.mjs | A:- | S:注册表在 tables.workspaces 下，扫错键会得到一份看起来像答案的假报告；「会话建了但不显示」类问题靠它几秒钟定位
+read-entries-defs.cjs[XA2T]: F:在渲染器包里定位 entriesOf 的声明表，区分 inject 的贡献与注册的赢家 | R:code:luzzy-page/tools/read-list-branch.cjs | A:- | S:一次性的取证脚本，直接读 DSH 安装目录里的包；路径写死本机安装位置
+read-entries-methods.cjs[XA2T]: F:在渲染器包里带上下文找出两个方法名的全部出现位置 | R:code:luzzy-page/tools/read-list-rows.cjs | A:- | S:一次性取证脚本；用来回答「注册了也选中了为什么什么都不渲染」
+read-list-branch.cjs[XA2T]: F:读渲染器的 list 类型分支，含 only 过滤，找出选中条目渲染为空的原因 | R:code:luzzy-page/tools/read-list-rows.cjs | A:- | S:conversation.view 是 list 插槽，这一支此前从未被读过；一次性取证脚本
+read-list-rows.cjs[XA2T]: F:读完整的 list 分支：行构建、only 过滤与空结果分支 | R:code:luzzy-page/tools/read-list-branch.cjs | A:- | S:一次性取证脚本，与 read-list-branch 互补，覆盖空列表这一支
+reconcile-usage.mjs[TQ5S]: F:把 Node 聚合器与独立实现的 Python 版对账，两边一致才认定数字正确 | R:code:luzzy-page/tools/aggregate-usage.py,code:luzzy-page/lib/usage-core.mjs | A:- | S:两侧必须读同一份快照——会话正在追加时读，差异可能来自数据而非逻辑
+render-anim-shot.mjs[TO4S]: F:在真浏览器里点窗口与模式控件，并在动画进行中截图 | R:code:luzzy-page/tools/shoot.mjs | A:- | S:静态截图证明不了动画——正常时序下过渡早已结束，看起来与没动画一样
+render-font-proof.py[TO4S]: F:用生成产物里真实的 @font-face 与 base64 渲染离线样张，脱离 DSH 检视字形 | R:code:luzzy-page/tools/build-font-css.py | A:- | S:读的是 lib/client.js 而非常量复述，因此证明的是真正发货的那份字体
+render-frame-preview.mjs[TQ6S]: F:把帧文档单独渲染成独立页面，并断言转义产出的是一份完整自包含文档 | R:code:luzzy-page/src/client.js,code:luzzy-page/tools/check-frame-script.mjs | A:- | S:帧模板里的反引号与转义出错只会表现为空白帧且报错位置离真凶很远，所以这份既是渲染器也是结构门
+render-frame-with-data.mjs[TO6M]: F:注入真实用量数据与预设夹具，离线渲染帧供截图与视觉验收 | R:code:luzzy-page/tools/dump-usage-data.mjs,code:luzzy-page/tools/shoot.mjs | A:- | S:要分两轮点击——切换窗口会重进加载态并重画，模式按钮得等第二次才点得到；只点标签页不会改单位，曾产出逐字节相同的截图
+render-hover-shot.mjs[TO4S]: F:在真浏览器里驱动图表悬停提示并截图 | R:code:luzzy-page/tools/shoot.mjs | A:- | S:结构断言只能证明标记与处理器存在，证明不了提示真的出现、位置正确、数字正确
+render-stale-payload.mjs[TO4S]: F:让用量页面对上一个过期的宿主载荷，检查它是否点名版本不符 | R:code:luzzy-page/tools/render-frame-with-data.mjs | A:- | S:客户端热重载而宿主不重载，新客户端配旧宿主是必经一段；说成「你没数据」最坏
+review-preset-chain.mjs[TQ7M]: F:静态跨产物审计：比对 op 集合、消息协议、路由路径、快照字段与修订守卫 | R:code:luzzy-page/tools/review-preset-rig.mjs | A:- | S:它存在的理由是两个真实事故：页面调用了宿主从没听过的 op，以及一个消息通道里放两种对话把会话 id 读成 null
+review-preset-rig.mjs[TQ8L]: F:动态端到端装置：真帧文档 + 真宿主路由 + 真浏览器，用真鼠标真键盘跑完预设子页的交互矩阵 | R:code:luzzy-page/tools/cdp-driver.mjs,code:luzzy-page/tools/review-preset-chain.mjs | A:- | S:DSH 的 agents/agentPresets/sessionController 不是被伪造而是缺席，页面因此走真实的降级分支；编辑必须用真点击加真按键驱动，合成插入会在一个用户打不进字的面上照样通过；并要断言光标落在被点的段落——只断言有字符进来抓不到位置错；断言须放在被测状态真的存在之后，并对着该模式下可见的面板
+scan-frame-backticks.mjs[TQ3T]: F:扫出帧模板里未转义的反引号 | R:code:luzzy-page/tools/check-frame-script.mjs | A:- | S:定位模板终点必须用已知结尾标记，用「第一个未转义反引号」会报出假通过
+shoot.mjs[XO4T]: F:共享的无头 Edge 截图步骤，被多个渲染器调用 | R:code:luzzy-page/tools/render-frame-with-data.mjs | A:- | S:必须同步等待——Edge 是 GUI 程序，异步启动立刻返回而 PNG 尚未落盘
+test-animation.mjs[TQ6M]: F:在真浏览器里验证图表的切换动画真的跑起来、且是瞬时的 | R:code:luzzy-page/tools/render-anim-shot.mjs | A:- | S:无头浏览器恒报 prefers-reduced-motion，动画被抑制看起来像 bug 其实不是；分三臂并打印实测偏好，写死期望值会让测试开始撒谎
+test-chart-path.mjs[TQ6M]: F:断言趋势曲线的几何性质：平滑后不越界、且刻度上限取到细密阶梯 | R:code:luzzy-page/src/client.js | A:- | S:曲线是 SVG 路径字符串，值得断言的是几何而非字符串——要按 t 采样取回贝塞尔控制点验算，因为过冲画到轴下面截图不一定看得出来
+test-client-load.mjs[TQ8L]: F:在 Node 沙箱里加载构建产物，断言注册契约、帧文档结构与客户端半的关键实现 | R:code:luzzy-page/lib/client.js,code:luzzy-page/tools/test-loader-contract.mjs | A:- | S:必须真加载 react 而不是打桩，否则会掩盖非法 hooks 调用；conversation.view 的 props 里没有 t 也没有 useStore，组件签名里解构它们就是白屏
+test-event-loop-responsiveness.mjs[TQ7M]: F:验证聚合与预热从不让宿主主线程长时间停顿 | R:code:luzzy-page/lib/usage-aggregate.mjs,code:luzzy-page/lib/usage-worker.mjs | A:- | S:预热和请求共用同一个停顿上限——把预热挪回主线程会被这个测试指名报出，而早期同步版真的崩过 DSH 两次
+test-host-integration.mjs[TQ6M]: F:把插件挂到真 webserver 包上跑集成，验证服务名、路由形状与卸载契约 | R:code:luzzy-page/lib/index.js,code:luzzy-page/tools/test-host-routes.mjs | A:- | S:单元测试用 Map 假装 webServer，证明不了服务名与 disposer 契约来自真包；诊断目录必须用环境变量指到临时位置，否则测试进程的 pid 与端口会写进用户真实目录并被当成应用证据
+test-host-routes.mjs[TQ6M]: F:在真 HTTP 上跑宿主路由的端到端契约，含状态码与 loopback 判定 | R:code:luzzy-page/lib/index.js,code:luzzy-page/tools/test-host-routes.mjs | A:- | S:假 ctx 抓不到「ctx.<服务> 对未声明名字会抛异常」这个缺陷——替身必须是会抛的代理；替身比真货宽松的地方就是假绿区
+test-installed-preset.mjs[TQ6M]: F:验证装到 DSH home 的那份预设行能从它真实所在的位置加载 | R:code:luzzy-preset/lib/persona.mjs,code:luzzy-page/tools/install-preset.mjs | A:- | S:仓库里能跑不等于装完能跑——预设被复制到另一个目录后只能解析自己的相对路径；曾出现种子被写进预设目录而读取器读 store，导致安静回退
+test-loader-contract.mjs[TQ5S]: F:按真实加载器的方式加载产物，守住 bundle 注册 id 与包名的契约 | R:code:luzzy-page/lib/client.js,code:luzzy-page/package.json | A:- | S:上一版用接受任意 id 的假模块表，于是产物坏了它照样通过；假货宽容一点，测试就永远抓不到那一类缺陷
+test-preset-assembly.mjs[TQ7M]: F:导入 DSH 安装目录里真的提示词渲染器，用真的行与真的 store 驱动一次组装 | R:code:luzzy-preset/lib/persona.mjs | A:- | S:打桩证明不了渲染器的性质，而「用户提示词必须走变量」这条前提只有真渲染器能证伪；同时断言同一段文本放进 section 文本会抛，这是反面证据
+test-preset-parity.mjs[TQ6S]: F:断言两份 preset-store.mjs 逐字节相同且在同一夹具上行为一致 | R:code:luzzy-page/lib/preset-store.mjs,code:luzzy-preset/lib/preset-store.mjs | A:- | S:副本漂移是看不见的失效——页面编辑的 store 与预设读的 store 规则不同，提示词就会与显示的文本不一致；两份都不能互相 import，所以只能靠这条测试守
+test-preset-persona.mjs[TQ6M]: F:断言预设行注册的 section 与变量，并按宿主的节奏驱动变量提供者 | R:code:luzzy-preset/lib/persona.mjs | A:- | S:section 文本必须是常量引用而非提示词本身——提示词进了 section 文本就会被重扫，用户写个花括号就能让每次请求失败
+test-preset-routes.mjs[TQ7M]: F:断言预设路由的契约与会话相关操作，含各档错误码与降级分支 | R:code:luzzy-page/lib/preset-routes.mjs,code:luzzy-page/lib/preset-ops.mjs | A:- | S:路由层是「诚实的失败变成 HTTP 状态」的地方，所以重点是错误码而非成功路径；可选服务缺失时要走降级分支而不是 500
+test-preset-store.mjs[TQ6M]: F:断言 store 的读、写与失败链，覆盖每个静默失效的场景 | R:code:luzzy-page/lib/preset-store.mjs | A:- | S:每个用例都对应一个在生产里不报错的失败——原子写、归档、悬空激活 id 的回退都属于「错了也不会响」的那一类
+test-usage-cache.mjs[TQ6M]: F:断言解析缓存既提速又逐位一致，覆盖损坏、版本不符与写不进去 | R:code:luzzy-page/lib/usage-cache.mjs | A:- | S:缓存把 20 秒变成 16 毫秒，所以值得有；但每一种失效都会静默给出错数字，这正是要测的原因
+test-usage-window.mjs[TQ6M]: F:覆盖自然时间窗口的边界：月首月末、周一周日、28 与 31 天的月 | R:code:luzzy-page/lib/usage-window.mjs | A:- | S:三条规则截图都抓不到——未到的时段留空而非填 0、窗口内每格都要输出、月按自然周切；注入 now 才能断言这些边界
+verify-font-css.py[TQ5S]: F:解码产物里每个内联字体，核对子集确实覆盖页面文案 | R:code:luzzy-page/lib/client.js,code:luzzy-page/tools/build-font-css.py | A:- | S:读的是生成产物而非构建脚本的自报——自己报自己等于没验；漏字会让文案安静地回退到系统字体
+verify-no-hooks.cjs[TQ5T]: F:断言产物里没有来自第二份 React 的 hooks 调用 | R:code:luzzy-page/lib/client.js | A:- | S:React #321 会让整页白屏且界面上没有任何报错，所以这条粗糙的文本断言是有意为之：一次疏忽就会退回那个白屏
+shoot-preset-markdown.mjs[TA5M]: F:浅色与暗色双主题下截取三种显示模式的真实渲染 | R:code:luzzy-page/tools/cdp-driver.mjs,code:luzzy-page/src/client.js | A:- | S:装置只证明行为，证明不了好不好看，视觉改动必须亲眼看渲染结果；route stub 必须注入帧文档内部而非父窗口——iframe 是独立文档，装错位置没有报错
+test-preset-markdown.mjs[TQ7M]: F:断言工具栏的编辑变换、帧内渲染器与 HTML 到 Markdown 的序列化器 | R:code:luzzy-page/src/client.js,code:luzzy-page/tools/review-preset-rig.mjs | A:- | S:函数从构建产物取出而非另写一份，副本会假通过；序列化契约是结构保真；替身 DOM 比真渲染宽松
+shoot-preset-menu.mjs[TA5M]: F:截取模式菜单展开态，并断言它向上弹出后仍在视口内 | R:code:luzzy-page/tools/cdp-driver.mjs,code:luzzy-page/tools/shoot-preset-markdown.mjs | A:- | S:菜单是唯一不在其他截图里出现的部件，不单独拍就等于只靠读代码交付；它锚在盒子底边向上弹，正是最容易被裁的位置，所以要断言 top/bottom 落在视口内
+
+===C:/Users/Administrator/Desktop/DSH/luzzy-preset/===
+README.md[SG5S]: F:LuzzyMode 预设的说明：提示词不在预设文件里，由预设子页托管 | R:code:luzzy-preset/lib/persona.mjs,code:luzzy-preset/preset.yml | A:- | S:预设目录自成一体，不要给它加 package.json、patch 或 profile 注册——同目录相对路径行就够了，多配只会多一个会失败的安装步骤
+agent.cordis.yml[FB8L]: F:LuzzyMode 的 agent 组装：内附 standard 的全部行，只把身份行换成 ./lib/persona.mjs | R:code:luzzy-preset/lib/persona.mjs,code:luzzy-preset/preset.yml | A:- | S:身份不在这个文件里，而由预设子页托管的提示词经变量注入，所以改身份不需要动这里；切换激活智能体不是切预设，因而能落在对话中途；除身份行外与 standard 一致，LuzzyMode 会话因此拥有同样的工具面
+preset.yml[FC4T]: F:预设的展示元数据：名称、描述与排序 | R:code:luzzy-preset/agent.cordis.yml | A:- | S:描述必须如实说明提示词不在预设里——把它写成普通预设会让用户以为改这里能改身份
+
+===C:/Users/Administrator/Desktop/DSH/luzzy-preset/lib/===
+default-prompt.md[SC3T]: F:包内兜底提示词，只在预设存储与 default.md 都读不到时才用 | R:code:luzzy-preset/lib/persona.mjs | A:- | S:它必须自我说明身份——读到它就意味着用户配置丢了，不能假装是用户的提示词
+persona.mjs[DB7M]: F:注册身份 section 与提示词变量，让提示词每次都从磁盘重新解析 | R:code:luzzy-preset/lib/preset-store.mjs,code:luzzy-preset/agent.cordis.yml | A:- | S:section 文本必须是常量引用、值走变量——section 文本会被重扫，用户提示词里的花括号会让每次请求抛错；变量值原样替换且逐步求值，改动下一次请求即生效并绕开预设锁
+preset-store.mjs[PD9L]: F:预设侧提示词与名单的磁盘真源（与 luzzy-page 下那份逐字节相同） | R:code:luzzy-preset/lib/persona.mjs | A:- | S:两份副本都不能互相 import，漂移只能靠 parity 测试发现；刻意不做读取缓存——等长改写的时间戳可能完全相同，缓存会安静送出旧提示词
+
+===C:/Users/Administrator/Desktop/DSH/skills/luzzy-roster-design-compose/===
+LICENSE[SZ2T]: F:Compose 子项 skill 的 MIT 许可原文 | R:- | A:- | S:随仓库分发；子项引用的上游正文各有自己的许可，须分别确认
+SKILL.md[SZ4T]: F:设计类子项·Compose 的清单：M3 主题、自适应布局与迁移三份官方正文 | R:code:skills/luzzy-roster-design/SKILL.md | A:- | S:命中 Compose UI 时基线照读；本子项管这个框架怎么落地，环境与工具链另属 Android 类目
+triggers.json[SQ3T]: F:Compose 子项 skill 的触发校验正反例 | R:code:skills/luzzy-roster-design-compose/SKILL.md | A:- | S:反例明确排除另外两个框架子项
+
+===C:/Users/Administrator/Desktop/DSH/skills/luzzy-roster-design-react/===
+LICENSE[SZ2T]: F:React 子项 skill 的 MIT 许可原文 | R:- | A:- | S:随仓库分发；shadcn 等上游正文的许可须单独核对
+SKILL.md[SZ4T]: F:设计类子项·React 的清单：shadcn/ui、Vercel 与 Anthropic 官方前端设计正文 | R:code:skills/luzzy-roster-design/SKILL.md | A:- | S:命中 React 时基线五条照读，本子项是叠加；它出框架落地规范，不出审美判断
+triggers.json[SQ3T]: F:React 子项 skill 的触发校验正反例 | R:code:skills/luzzy-roster-design-react/SKILL.md | A:- | S:反例覆盖别的框架子项，防止跨框架误激活
+
+===C:/Users/Administrator/Desktop/DSH/skills/luzzy-roster-design-vue/===
+LICENSE[SZ2T]: F:Vue 子项 skill 的 MIT 许可原文 | R:- | A:- | S:随仓库分发；Nuxt UI 等上游正文的许可须单独核对
+SKILL.md[SZ4T]: F:设计类子项·Vue 的清单：vuejs-ai、Nuxt UI 与 nuxt-skills 三份正文 | R:code:skills/luzzy-roster-design/SKILL.md | A:- | S:命中 Vue 或 Nuxt 时基线照读；本子项管组件组织与 UI 库接入
+triggers.json[SQ3T]: F:Vue 子项 skill 的触发校验正反例 | R:code:skills/luzzy-roster-design-vue/SKILL.md | A:- | S:与另两个框架子项互为反例，避免同页多框架时读错
+
+===C:/Users/Administrator/Desktop/DSH/skills/luzzy-roster-design/===
+LICENSE[SZ2T]: F:设计类基线 skill 的 MIT 许可原文 | R:- | A:- | S:随 LuzzyPrompt 仓库分发，署名鹿溪；对外分发前仍须单独确认上游各条子项的许可
+SKILL.md[SZ5S]: F:设计类（UI/动效/前端页面/交互）的配套清单：五条基线子项与获取方式 | R:code:skills/luzzy-roster-design-react/SKILL.md | A:- | S:它只承载「命中该类时要读什么」，规则与红线留在系统提示词里；框架子项与基线是叠加而非二选一，判不出框架时只读基线
+triggers.json[SQ3T]: F:基线 skill 的触发校验样本，含应当激活与不应激活两组 | R:code:skills/luzzy-roster-design/SKILL.md | A:- | S:含 should_activate 为假的反例——只测正例无法发现误激活

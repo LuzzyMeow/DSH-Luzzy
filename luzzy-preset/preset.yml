@@ -1,0 +1,8 @@
+# LuzzyMode — the LuzzyPage-managed agent preset.
+#
+# The prompt shown in the picker. Keep it honest about where identity comes from: the
+# composition in this directory carries tools and nothing else, and the system prompt is
+# resolved from `LuzzyPage → 预设`.
+name: LuzzyMode
+description: LuzzyMode —— 提示词由 LuzzyPage 的「预设」子页托管。可自定义 system prompt、可分组管理多个智能体提示词，切换激活智能体即时生效（不必新开会话、不必重启）。预设文件本身只定义工具面与插件组装，不携带任何提示词。
+order: 9

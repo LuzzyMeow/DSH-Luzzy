@@ -1,0 +1,662 @@
+{
+  "version": 1,
+  "created_at": "2026-09-21T09:02:30Z",
+  "updated_at": "2026-09-22T01:58:38Z",
+  "files": {
+    ".gitattributes": {
+      "sha256": "21fa16a2122e2b0360b47502c577428b645437e08e9e87ffba661f84853cb476",
+      "size": 291,
+      "normalized_sha256": "21fa16a2122e2b0360b47502c577428b645437e08e9e87ffba661f84853cb476"
+    },
+    ".gitignore": {
+      "sha256": "9e3458c1d049be81f2aac0512807cae0e374a1d2e7c15baf212c2f85306e60db",
+      "size": 507,
+      "normalized_sha256": "9e3458c1d049be81f2aac0512807cae0e374a1d2e7c15baf212c2f85306e60db"
+    },
+    "AGENTS.md": {
+      "sha256": "c0cd6c6cfedd60a5f44434ebcfd8f0c28ee47bd8800cc6def48f6ea3e8fb7662",
+      "size": 65266,
+      "normalized_sha256": "c0cd6c6cfedd60a5f44434ebcfd8f0c28ee47bd8800cc6def48f6ea3e8fb7662"
+    },
+    "aoci.code.txt": {
+      "sha256": "47f6ef4264950cad9e08417df35ad61cb0cb14e03c174c26764721ef513e1583",
+      "size": 33548,
+      "normalized_sha256": "47f6ef4264950cad9e08417df35ad61cb0cb14e03c174c26764721ef513e1583"
+    },
+    "aoci.meta.txt": {
+      "role": "index",
+      "sha256": "60ffea0527ae0e1e2b5bf822c119cd3141118cdd33479dec063ee5f9c2114126",
+      "size": 1900,
+      "normalized_sha256": "60ffea0527ae0e1e2b5bf822c119cd3141118cdd33479dec063ee5f9c2114126"
+    },
+    "aoci.txt": {
+      "role": "index",
+      "sha256": "79f5ce40e420bfcd4311bd05c6f7c61dfe7520f5be47ddf05f24b7dd1784ed8e",
+      "size": 299,
+      "normalized_sha256": "79f5ce40e420bfcd4311bd05c6f7c61dfe7520f5be47ddf05f24b7dd1784ed8e"
+    },
+    "docs/01-插件模型与写法.md": {
+      "sha256": "2a22237a4400850fcec92814581f93c8ffca9bac10c6db14413defbea2c02440",
+      "size": 15911,
+      "normalized_sha256": "2a22237a4400850fcec92814581f93c8ffca9bac10c6db14413defbea2c02440"
+    },
+    "docs/02-组装安装与客户端插件.md": {
+      "sha256": "473fbb4107d09c3e7b740b0c87b5365d07753f33a5de448b87768b863cfbb555",
+      "size": 16338,
+      "normalized_sha256": "473fbb4107d09c3e7b740b0c87b5365d07753f33a5de448b87768b863cfbb555"
+    },
+    "docs/03-注意事项与来源核验.md": {
+      "sha256": "2b763daaf974d59b0d83b6e259529d2efa4bec328a5005cb29d2f71586a4b062",
+      "size": 15513,
+      "normalized_sha256": "2b763daaf974d59b0d83b6e259529d2efa4bec328a5005cb29d2f71586a4b062"
+    },
+    "docs/04-服务与运行时.md": {
+      "sha256": "09266b32a607c43c5e9ffe19a736efac351228705ab90d6c8d2829e6d81f5ccd",
+      "size": 21913,
+      "normalized_sha256": "09266b32a607c43c5e9ffe19a736efac351228705ab90d6c8d2829e6d81f5ccd"
+    },
+    "docs/05-前端技术栈与客户端插件机制.md": {
+      "sha256": "c76aae4e230ad8cf7c6f6da1e3f81b5f841c07dc336e617e006cdc6eba643ff5",
+      "size": 17530,
+      "normalized_sha256": "c76aae4e230ad8cf7c6f6da1e3f81b5f841c07dc336e617e006cdc6eba643ff5"
+    },
+    "docs/NOTES-B站两期视频笔记.md": {
+      "sha256": "9ca4ee0958491ee3a6737083fd9e4401ebfb1448e88571ff872a47a837ea78b0",
+      "size": 46534,
+      "normalized_sha256": "cadda4a327f450fa8556b04f009dbf83632738ec48d1ffd85f85b04277b77b32"
+    },
+    "docs/README.md": {
+      "sha256": "17c64450dcd6a21117d867d0b55638798ce089986c7f9c875d5644b765a01ac9",
+      "size": 5498,
+      "normalized_sha256": "17c64450dcd6a21117d867d0b55638798ce089986c7f9c875d5644b765a01ac9"
+    },
+    "docs/RESEARCH-DSH插件层可行性调研.md": {
+      "sha256": "4475a7d969e8917a52b56ca608b4751312b0c1ebd5370a17431bbf6fd0765bb9",
+      "size": 55150,
+      "normalized_sha256": "4475a7d969e8917a52b56ca608b4751312b0c1ebd5370a17431bbf6fd0765bb9"
+    },
+    "docs/STATUS-LuzzyPage工作节点.md": {
+      "sha256": "cc494161727463946c6e7f0cde0e2ee305e2436b25f2d3156ff388c41b14de14",
+      "size": 81234,
+      "normalized_sha256": "cc494161727463946c6e7f0cde0e2ee305e2436b25f2d3156ff388c41b14de14"
+    },
+    "docs/shots/anim-motion-arm.png": {
+      "role": "index",
+      "sha256": "8f345f7d7b91bb61415dfd11f303855c4f158fd496ae03d2c9195ba268bb5143",
+      "size": 28655
+    },
+    "docs/shots/anim-reduced-arm.png": {
+      "role": "index",
+      "sha256": "383e80a9917d57912d0d3f4d95d598ac7842234a81026b4730c024dbdd1f8b4a",
+      "size": 28516
+    },
+    "docs/shots/hover-month-bar.png": {
+      "role": "index",
+      "sha256": "d262a14235ed2ae09fd671e9a160ba2b01eafa604c70be298f0778492832e467",
+      "size": 118642
+    },
+    "docs/shots/hover-month-line.png": {
+      "role": "index",
+      "sha256": "4fd34d6b7ab69e21ad650984a9417ac3ad89bbd0302538b6ae49f829ee498a2d",
+      "size": 141447
+    },
+    "docs/shots/hover-week-bar.png": {
+      "role": "index",
+      "sha256": "2308e56f5e7ddb12431f139f776a3199ed5471832cb1ece48883b91ebfebb752",
+      "size": 102924
+    },
+    "docs/shots/hover-week-line.png": {
+      "role": "index",
+      "sha256": "4fae17a38f7e73bcb0a453ce3f25fb0929560b2435aca4037c625397cab26413",
+      "size": 137294
+    },
+    "docs/shots/readme-dark.png": {
+      "role": "index",
+      "sha256": "73288ef49fcce1d9ed8939883ff5ffaa8e6acad2d85419fab45062ed78e009b0",
+      "size": 320607
+    },
+    "docs/shots/readme-light.png": {
+      "role": "index",
+      "sha256": "cb5ee2c7a2c32fc2ea1144f4bc4ce7ffd7d6e6893f00275d5812cd609146d938",
+      "size": 320964
+    },
+    "docs/shots/usage-day-bar.png": {
+      "role": "index",
+      "sha256": "4cb38dda6b8f62775f5d0fd2db6f8c957d76adc3e4810aa19765a5e43d1146d3",
+      "size": 86927
+    },
+    "docs/shots/usage-day-dark.png": {
+      "role": "index",
+      "sha256": "f78d4635bb708996c7c18c7c1f04a3e2310c49f06560e8f2882c5cb6e599b8da",
+      "size": 101954
+    },
+    "docs/shots/usage-day-line.png": {
+      "role": "index",
+      "sha256": "f66c33d8bae2ea631260fbb5866429d7e09a4ac83731ad51fbf9c2ac4e6209fe",
+      "size": 100251
+    },
+    "docs/shots/usage-month-bar.png": {
+      "role": "index",
+      "sha256": "66b203928ee2cf3e301fd47cc5beaba0f6408814f286c30f52036c43872a4b69",
+      "size": 98823
+    },
+    "docs/shots/usage-month-line.png": {
+      "role": "index",
+      "sha256": "9b0f34a3e5b748e81579c959eedab2ac83b6b976a09a205ac1081b44806b0d6e",
+      "size": 123279
+    },
+    "docs/shots/usage-stale-host.png": {
+      "role": "index",
+      "sha256": "ce325aeeb8d2e6b12e2599edfe1826a9f11ae13e368bd4a4192f45b5d6d075c7",
+      "size": 82144
+    },
+    "docs/shots/usage-week-bar.png": {
+      "role": "index",
+      "sha256": "a00577b8ae6f98ccf904466998cf84a8993863d690627fd96dc7dbabd28f51aa",
+      "size": 93192
+    },
+    "docs/shots/usage-week-line.png": {
+      "role": "index",
+      "sha256": "e7860e00eca5dc7a612abc9e94af12aa20cf0a36f0fc61b8d8b8e0fe6ec46846",
+      "size": 128938
+    },
+    "luzzy-page/README.md": {
+      "sha256": "f23dfe4a14134f8804ada7769c17b2867d18c55f437eb6a6d4476a81a0d8b666",
+      "size": 24208,
+      "normalized_sha256": "f23dfe4a14134f8804ada7769c17b2867d18c55f437eb6a6d4476a81a0d8b666"
+    },
+    "luzzy-page/cordis.patch.yml": {
+      "sha256": "ab59d1f35afbef1093d179ba5fb208fe2d346939af5a1664c06b707957d7d9f3",
+      "size": 58,
+      "normalized_sha256": "ab59d1f35afbef1093d179ba5fb208fe2d346939af5a1664c06b707957d7d9f3"
+    },
+    "luzzy-page/lib/client.js": {
+      "sha256": "5e49d21a609f5d1f0960b0295e11e27ed7f3dec22016e35f1217cb75fee1b510",
+      "size": 577717,
+      "normalized_sha256": "83ac59acc5a2798105d6a12e1b7d44ae329a4b63e024352f07f38c0175fc9646"
+    },
+    "luzzy-page/lib/index.js": {
+      "sha256": "3267dc4e3941e23977d7a76ed4e8ca10b0e68536744119906af0c06e967d9474",
+      "size": 11602,
+      "normalized_sha256": "3267dc4e3941e23977d7a76ed4e8ca10b0e68536744119906af0c06e967d9474"
+    },
+    "luzzy-page/lib/preset-ops.mjs": {
+      "sha256": "a00a0572a051c58b1fa8de06699588dea49165025dc810349141780c000fa59f",
+      "size": 22396,
+      "normalized_sha256": "a00a0572a051c58b1fa8de06699588dea49165025dc810349141780c000fa59f"
+    },
+    "luzzy-page/lib/preset-routes.mjs": {
+      "sha256": "37b2ca913e72152aad4b33fd73a4a81afe36a24f5caa5b33584534840820a547",
+      "size": 8457,
+      "normalized_sha256": "37b2ca913e72152aad4b33fd73a4a81afe36a24f5caa5b33584534840820a547"
+    },
+    "luzzy-page/lib/preset-store.mjs": {
+      "sha256": "ea347412c19ccc772e954c7184a451373875fe968bfde96b4a05d7c3d6fa3df4",
+      "size": 25918,
+      "normalized_sha256": "ea347412c19ccc772e954c7184a451373875fe968bfde96b4a05d7c3d6fa3df4"
+    },
+    "luzzy-page/lib/usage-aggregate.mjs": {
+      "sha256": "f1bbefed2c882136843e1cd8dfbda2960a2e795746b63277556dce6296c15a20",
+      "size": 8508,
+      "normalized_sha256": "f1bbefed2c882136843e1cd8dfbda2960a2e795746b63277556dce6296c15a20"
+    },
+    "luzzy-page/lib/usage-cache.mjs": {
+      "sha256": "bb1961e0f91bf6a383d2a4650a3aa5b0efbd403a682cf08bff7c0502f767eead",
+      "size": 6610,
+      "normalized_sha256": "bb1961e0f91bf6a383d2a4650a3aa5b0efbd403a682cf08bff7c0502f767eead"
+    },
+    "luzzy-page/lib/usage-core.mjs": {
+      "sha256": "2bf4f70d1a55b5d436ef13b205b903bb846d44e19c69144a14eee974d2246f9c",
+      "size": 7961,
+      "normalized_sha256": "2bf4f70d1a55b5d436ef13b205b903bb846d44e19c69144a14eee974d2246f9c"
+    },
+    "luzzy-page/lib/usage-window.mjs": {
+      "sha256": "0595c3eb9a764534437672b8e0d14490509b2dde31382c7180fe8bd44e915b8e",
+      "size": 11288,
+      "normalized_sha256": "0595c3eb9a764534437672b8e0d14490509b2dde31382c7180fe8bd44e915b8e"
+    },
+    "luzzy-page/lib/usage-worker.mjs": {
+      "sha256": "987c8f1ac3b6472df62cfa5a26ecfa803103f29f839eeea7c98810f74351692e",
+      "size": 7469,
+      "normalized_sha256": "987c8f1ac3b6472df62cfa5a26ecfa803103f29f839eeea7c98810f74351692e"
+    },
+    "luzzy-page/package.json": {
+      "sha256": "205d93006193d4ef5aa3cc429806f5d20f5161234caf2ea37d7bb290b2911462",
+      "size": 830,
+      "normalized_sha256": "205d93006193d4ef5aa3cc429806f5d20f5161234caf2ea37d7bb290b2911462"
+    },
+    "luzzy-page/src/client.js": {
+      "sha256": "76371d4c6a199c63ea69d01eae2a9a3e82c5184f98b3f4551f847c6fb5783260",
+      "size": 178633,
+      "normalized_sha256": "4b7eb534d5ce25263f20da90a435eb26c8b55759ca23deb3a9742d44b8dc3497"
+    },
+    "luzzy-page/tools/aggregate-usage.py": {
+      "sha256": "875be0da520eb83da66ac7b6ef0e5ac4c1a403c14465f28e63220863e08f6fb9",
+      "size": 7842,
+      "normalized_sha256": "875be0da520eb83da66ac7b6ef0e5ac4c1a403c14465f28e63220863e08f6fb9"
+    },
+    "luzzy-page/tools/analyze-readme.cjs": {
+      "sha256": "ab101a3048afa4eb645ee39169ce801b67e19df8bede002b29e7983b1d86b628",
+      "size": 862,
+      "normalized_sha256": "ab101a3048afa4eb645ee39169ce801b67e19df8bede002b29e7983b1d86b628"
+    },
+    "luzzy-page/tools/aoci-loop.mjs": {
+      "sha256": "99eee77609520beae55a3e7735d98152024203a7461be4722d028d569d46d473",
+      "size": 3323,
+      "normalized_sha256": "99eee77609520beae55a3e7735d98152024203a7461be4722d028d569d46d473"
+    },
+    "luzzy-page/tools/aoci-mcp-client.mjs": {
+      "sha256": "165a20d1978db1a76da776804b4c1af35e3e6eae494cadaf3a50b63e05ca6e1c",
+      "size": 3386,
+      "normalized_sha256": "165a20d1978db1a76da776804b4c1af35e3e6eae494cadaf3a50b63e05ca6e1c"
+    },
+    "luzzy-page/tools/aoci-validate-entries.mjs": {
+      "sha256": "bce160c267e3a132dc9efe12e643d92e664ff97da30d12f3993fb0f61751e6ed",
+      "size": 3767,
+      "normalized_sha256": "bce160c267e3a132dc9efe12e643d92e664ff97da30d12f3993fb0f61751e6ed"
+    },
+    "luzzy-page/tools/build-font-css.py": {
+      "sha256": "801ddb9d10efc592b2252473bc3995c1500a8eb1ce3652b987802b869c13d5d5",
+      "size": 11343,
+      "normalized_sha256": "801ddb9d10efc592b2252473bc3995c1500a8eb1ce3652b987802b869c13d5d5"
+    },
+    "luzzy-page/tools/cdp-driver.mjs": {
+      "sha256": "8eccfc973068aaa043bd7bb3ee2ef16b728f7a043bea6b4fbe78edc4aa8f2bc9",
+      "size": 20139,
+      "normalized_sha256": "8eccfc973068aaa043bd7bb3ee2ef16b728f7a043bea6b4fbe78edc4aa8f2bc9"
+    },
+    "luzzy-page/tools/check-frame-script.mjs": {
+      "sha256": "945f29ca9589cc51d83ab1c8ce46791345e8b49c41e9bf5473df5ba207fc9ada",
+      "size": 2775,
+      "normalized_sha256": "945f29ca9589cc51d83ab1c8ce46791345e8b49c41e9bf5473df5ba207fc9ada"
+    },
+    "luzzy-page/tools/dump-usage-data.mjs": {
+      "sha256": "b122172a36181d9ced6a8712c66df60c401376a67267a3c8c0a5c55c5672f32f",
+      "size": 3625,
+      "normalized_sha256": "b122172a36181d9ced6a8712c66df60c401376a67267a3c8c0a5c55c5672f32f"
+    },
+    "luzzy-page/tools/install-preset.mjs": {
+      "sha256": "a85da76c0eeab5182be2cf7e1e30186c1f8adb102ac40f35319fb73a2aaf6ee4",
+      "size": 10894,
+      "normalized_sha256": "a85da76c0eeab5182be2cf7e1e30186c1f8adb102ac40f35319fb73a2aaf6ee4"
+    },
+    "luzzy-page/tools/probe-aggregate.mjs": {
+      "sha256": "9c9b0f912b1f20c52b96fcd8025d20d79e5476b73f5af16d31fb2bfdd81a66b0",
+      "size": 1720,
+      "normalized_sha256": "9c9b0f912b1f20c52b96fcd8025d20d79e5476b73f5af16d31fb2bfdd81a66b0"
+    },
+    "luzzy-page/tools/probe-cache-bench.mjs": {
+      "sha256": "641332230da1e7ca239f28d0fc0196e4799f3eecbd84940b4cd9534c2645f31a",
+      "size": 4843,
+      "normalized_sha256": "641332230da1e7ca239f28d0fc0196e4799f3eecbd84940b4cd9534c2645f31a"
+    },
+    "luzzy-page/tools/probe-extract-cost.mjs": {
+      "sha256": "25b307e2a7a64be8749672969b316bdbf7575829624eaccb37f4ef9c50ca5b75",
+      "size": 3034,
+      "normalized_sha256": "25b307e2a7a64be8749672969b316bdbf7575829624eaccb37f4ef9c50ca5b75"
+    },
+    "luzzy-page/tools/probe-first-paint.mjs": {
+      "sha256": "f85fcdfe8de5defc2692ba61e6a7790f67e4ecb4a126dbf5228314a8c9beec3e",
+      "size": 2563,
+      "normalized_sha256": "f85fcdfe8de5defc2692ba61e6a7790f67e4ecb4a126dbf5228314a8c9beec3e"
+    },
+    "luzzy-page/tools/probe-frame-console.mjs": {
+      "sha256": "ae0f82add6fc617ae432da49d7dd90b2ca4274714a56819d176ba0e96a4892a0",
+      "size": 9699,
+      "normalized_sha256": "ae0f82add6fc617ae432da49d7dd90b2ca4274714a56819d176ba0e96a4892a0"
+    },
+    "luzzy-page/tools/probe-host-warmup-path.mjs": {
+      "sha256": "61fa0a9038625d77004a7296e2fd6ec3e98b08e0193f1aa77e104dbb8780f648",
+      "size": 4764,
+      "normalized_sha256": "61fa0a9038625d77004a7296e2fd6ec3e98b08e0193f1aa77e104dbb8780f648"
+    },
+    "luzzy-page/tools/probe-session-usage.py": {
+      "sha256": "417121a85ce65523d51a446c90dfc9e42186525867d8c91a7b8a30b6e456bc74",
+      "size": 6128,
+      "normalized_sha256": "417121a85ce65523d51a446c90dfc9e42186525867d8c91a7b8a30b6e456bc74"
+    },
+    "luzzy-page/tools/probe-warmth.mjs": {
+      "sha256": "e38f40441d35b4ecdd0bc2051e5f3d56fff1e9afdb2bef874499fb335af60222",
+      "size": 1729,
+      "normalized_sha256": "e38f40441d35b4ecdd0bc2051e5f3d56fff1e9afdb2bef874499fb335af60222"
+    },
+    "luzzy-page/tools/probe-workspace-attach.mjs": {
+      "sha256": "454710671a6239545f4f37d5fc876f5257c5928922d6b3498d6037b1446e5c74",
+      "size": 5563,
+      "normalized_sha256": "454710671a6239545f4f37d5fc876f5257c5928922d6b3498d6037b1446e5c74"
+    },
+    "luzzy-page/tools/read-entries-defs.cjs": {
+      "sha256": "a2d5cf0c0d31c712f76ec671b75b0258f8e7d11f876d6cfac098032da19e379d",
+      "size": 697,
+      "normalized_sha256": "a2d5cf0c0d31c712f76ec671b75b0258f8e7d11f876d6cfac098032da19e379d"
+    },
+    "luzzy-page/tools/read-entries-methods.cjs": {
+      "sha256": "9f74ebb7fa9027245ab66b93a0717bb5f32b68484eb4da611844a4641359e410",
+      "size": 914,
+      "normalized_sha256": "9f74ebb7fa9027245ab66b93a0717bb5f32b68484eb4da611844a4641359e410"
+    },
+    "luzzy-page/tools/read-list-branch.cjs": {
+      "sha256": "89fb3bbb5028725b4f4950689c9bba4358475c3ca51728d044ffd1156ce66d87",
+      "size": 790,
+      "normalized_sha256": "89fb3bbb5028725b4f4950689c9bba4358475c3ca51728d044ffd1156ce66d87"
+    },
+    "luzzy-page/tools/read-list-rows.cjs": {
+      "sha256": "cc746f4e5cef517cdf47449d7d760e800a8856b1f25105c976fa0f2d1800684e",
+      "size": 457,
+      "normalized_sha256": "cc746f4e5cef517cdf47449d7d760e800a8856b1f25105c976fa0f2d1800684e"
+    },
+    "luzzy-page/tools/reconcile-usage.mjs": {
+      "sha256": "bee9ee1381c696ebc8a7931f99472a5ce492dd63ec610d1d7ff866c2edc3e4e3",
+      "size": 4533,
+      "normalized_sha256": "bee9ee1381c696ebc8a7931f99472a5ce492dd63ec610d1d7ff866c2edc3e4e3"
+    },
+    "luzzy-page/tools/render-anim-shot.mjs": {
+      "sha256": "311f25c03e2ef2cca40421ff4b153be5da92a88afd14c4530510d211c79181fc",
+      "size": 4951,
+      "normalized_sha256": "311f25c03e2ef2cca40421ff4b153be5da92a88afd14c4530510d211c79181fc"
+    },
+    "luzzy-page/tools/render-font-proof.py": {
+      "sha256": "7c50b2258d22f3ed4bf7ae94a44a6efc8df30cd0a96854e7b8ea91a19bf0574e",
+      "size": 7712,
+      "normalized_sha256": "7c50b2258d22f3ed4bf7ae94a44a6efc8df30cd0a96854e7b8ea91a19bf0574e"
+    },
+    "luzzy-page/tools/render-frame-preview.mjs": {
+      "sha256": "19be199a635a531895be9c2d49023dbfb3677a05cf336d86d2b536faab9c7a07",
+      "size": 6208,
+      "normalized_sha256": "19be199a635a531895be9c2d49023dbfb3677a05cf336d86d2b536faab9c7a07"
+    },
+    "luzzy-page/tools/render-frame-with-data.mjs": {
+      "sha256": "a2ec9d79bf1219394e13d50f7d173da01aaf9146110cf24c2c8c1eda02666dd2",
+      "size": 10931,
+      "normalized_sha256": "a2ec9d79bf1219394e13d50f7d173da01aaf9146110cf24c2c8c1eda02666dd2"
+    },
+    "luzzy-page/tools/render-hover-shot.mjs": {
+      "sha256": "65061b4efcc6b8687c39f74866c891fd04f6ea0cf9947463a241edb93e9bfd9b",
+      "size": 5691,
+      "normalized_sha256": "65061b4efcc6b8687c39f74866c891fd04f6ea0cf9947463a241edb93e9bfd9b"
+    },
+    "luzzy-page/tools/render-stale-payload.mjs": {
+      "sha256": "7725ca38899141e76b7c51b66474004c99d3a95f0c3f03c6d50f654fa6559e17",
+      "size": 3372,
+      "normalized_sha256": "7725ca38899141e76b7c51b66474004c99d3a95f0c3f03c6d50f654fa6559e17"
+    },
+    "luzzy-page/tools/review-preset-chain.mjs": {
+      "sha256": "2e86d061baeb959e0d9c17f8c93b736dd1e80873a90797c71b07024484ec2bd9",
+      "size": 18348,
+      "normalized_sha256": "2e86d061baeb959e0d9c17f8c93b736dd1e80873a90797c71b07024484ec2bd9"
+    },
+    "luzzy-page/tools/review-preset-rig.mjs": {
+      "sha256": "f74481fb5e252c280abf0c1cd1085617564d0de8637aaa35dd6536c75463c865",
+      "size": 80354,
+      "normalized_sha256": "f74481fb5e252c280abf0c1cd1085617564d0de8637aaa35dd6536c75463c865"
+    },
+    "luzzy-page/tools/scan-frame-backticks.mjs": {
+      "sha256": "9bee602f70b1effa0d9a676266390182a11cae73987d2365d995d76d7ac0562d",
+      "size": 2347,
+      "normalized_sha256": "9bee602f70b1effa0d9a676266390182a11cae73987d2365d995d76d7ac0562d"
+    },
+    "luzzy-page/tools/shoot-preset-markdown.mjs": {
+      "sha256": "105564d041ecf8fa6a3dd047d6d9788d7212d7e3c0e6523de5b65c0d3055811b",
+      "size": 12843,
+      "normalized_sha256": "105564d041ecf8fa6a3dd047d6d9788d7212d7e3c0e6523de5b65c0d3055811b"
+    },
+    "luzzy-page/tools/shoot-preset-menu.mjs": {
+      "sha256": "8173f1be5abde16dc78195241ecf58de989fc12e7a93781df46c378388cab42e",
+      "size": 7053,
+      "normalized_sha256": "8173f1be5abde16dc78195241ecf58de989fc12e7a93781df46c378388cab42e"
+    },
+    "luzzy-page/tools/shoot.mjs": {
+      "sha256": "a0d9a522acbbd565a94bd437423f853f260682da24dfde492d005b57e8e7fa6d",
+      "size": 1967,
+      "normalized_sha256": "a0d9a522acbbd565a94bd437423f853f260682da24dfde492d005b57e8e7fa6d"
+    },
+    "luzzy-page/tools/test-animation.mjs": {
+      "sha256": "17a8a5898cb2daecb8a4b1c6dc65705ce48d3d12759fa11c2560b7e187f37a13",
+      "size": 9112,
+      "normalized_sha256": "17a8a5898cb2daecb8a4b1c6dc65705ce48d3d12759fa11c2560b7e187f37a13"
+    },
+    "luzzy-page/tools/test-chart-path.mjs": {
+      "sha256": "91102643ed48317c19167f554bc93e6181ee01e79f57f553400a1f28e117c878",
+      "size": 7210,
+      "normalized_sha256": "91102643ed48317c19167f554bc93e6181ee01e79f57f553400a1f28e117c878"
+    },
+    "luzzy-page/tools/test-client-load.mjs": {
+      "sha256": "f00ad2ab069de8a17fe02fc8e133997c28d2bc0e618cda8a7e173a54cc3413e7",
+      "size": 28794,
+      "normalized_sha256": "f00ad2ab069de8a17fe02fc8e133997c28d2bc0e618cda8a7e173a54cc3413e7"
+    },
+    "luzzy-page/tools/test-event-loop-responsiveness.mjs": {
+      "sha256": "9af52f916830f519e0d5b7f29ff4da3f6e959d5fde2d2adbf3ea653921cc8a9e",
+      "size": 6565,
+      "normalized_sha256": "9af52f916830f519e0d5b7f29ff4da3f6e959d5fde2d2adbf3ea653921cc8a9e"
+    },
+    "luzzy-page/tools/test-host-integration.mjs": {
+      "sha256": "44323f73e5f32d12a31977166d6abbe496a5a27ad3093271ea0a527a6c906b8d",
+      "size": 8175,
+      "normalized_sha256": "44323f73e5f32d12a31977166d6abbe496a5a27ad3093271ea0a527a6c906b8d"
+    },
+    "luzzy-page/tools/test-host-routes.mjs": {
+      "sha256": "d3da3e8ce1f5a9343199aaeb7f83d9f71319bfd5fbf2cd2a4ae1cd003173812c",
+      "size": 7604,
+      "normalized_sha256": "d3da3e8ce1f5a9343199aaeb7f83d9f71319bfd5fbf2cd2a4ae1cd003173812c"
+    },
+    "luzzy-page/tools/test-installed-preset.mjs": {
+      "sha256": "c41d31971bb57b2ed31755f245f7b1ad7b22f1ad443aa98493f9edfd37c04eb3",
+      "size": 8087,
+      "normalized_sha256": "c41d31971bb57b2ed31755f245f7b1ad7b22f1ad443aa98493f9edfd37c04eb3"
+    },
+    "luzzy-page/tools/test-loader-contract.mjs": {
+      "sha256": "0914f78e24f645ae7fab7778fd79ea4ca340290f836dd3b9e34605fbc6c10992",
+      "size": 5082,
+      "normalized_sha256": "0914f78e24f645ae7fab7778fd79ea4ca340290f836dd3b9e34605fbc6c10992"
+    },
+    "luzzy-page/tools/test-preset-assembly.mjs": {
+      "sha256": "bfd56155fe893f6d8a64b937cdbf72ea249ad1b0f53fb5b94129c34180f83e08",
+      "size": 16473,
+      "normalized_sha256": "bfd56155fe893f6d8a64b937cdbf72ea249ad1b0f53fb5b94129c34180f83e08"
+    },
+    "luzzy-page/tools/test-preset-markdown.mjs": {
+      "sha256": "ec902a3a3790827d27d2bb6e06a3f5b00b77356227f8950e7615cf1ace9c4ae8",
+      "size": 24806,
+      "normalized_sha256": "ec902a3a3790827d27d2bb6e06a3f5b00b77356227f8950e7615cf1ace9c4ae8"
+    },
+    "luzzy-page/tools/test-preset-parity.mjs": {
+      "sha256": "f714e44443e8e9b6ef759ebbce352fc23c2857e6229f5bc0290ee2b822b722d6",
+      "size": 5947,
+      "normalized_sha256": "f714e44443e8e9b6ef759ebbce352fc23c2857e6229f5bc0290ee2b822b722d6"
+    },
+    "luzzy-page/tools/test-preset-persona.mjs": {
+      "sha256": "9a3cef80bdae4d5f515ed59769e6a0e11e1198b24b65e7661c00192ca31602bf",
+      "size": 9069,
+      "normalized_sha256": "9a3cef80bdae4d5f515ed59769e6a0e11e1198b24b65e7661c00192ca31602bf"
+    },
+    "luzzy-page/tools/test-preset-routes.mjs": {
+      "sha256": "b56c37abc1cc05c5ef9060e26cbe23def6784794bbd5581df84a7ccb57ff459f",
+      "size": 24105,
+      "normalized_sha256": "b56c37abc1cc05c5ef9060e26cbe23def6784794bbd5581df84a7ccb57ff459f"
+    },
+    "luzzy-page/tools/test-preset-store.mjs": {
+      "sha256": "5e9e0c445eb7c21154ce05ff1a87b24ffd425f890f8d17b14799c9ca55b56107",
+      "size": 14003,
+      "normalized_sha256": "5e9e0c445eb7c21154ce05ff1a87b24ffd425f890f8d17b14799c9ca55b56107"
+    },
+    "luzzy-page/tools/test-usage-cache.mjs": {
+      "sha256": "668fbe3e2cac5d47454ee2a0c663edcfce7228203de2d949639e8ecb5502ff61",
+      "size": 7836,
+      "normalized_sha256": "668fbe3e2cac5d47454ee2a0c663edcfce7228203de2d949639e8ecb5502ff61"
+    },
+    "luzzy-page/tools/test-usage-window.mjs": {
+      "sha256": "996a8dfc2dfb46ed9af8d02a0918daf599311bd2b1a81af84fff1a95fb88ea59",
+      "size": 13075,
+      "normalized_sha256": "996a8dfc2dfb46ed9af8d02a0918daf599311bd2b1a81af84fff1a95fb88ea59"
+    },
+    "luzzy-page/tools/verify-font-css.py": {
+      "sha256": "7b2300a7532907faf8b72ec18bd7136d821b303b4117f8dce6cae82a731adeaf",
+      "size": 4562,
+      "normalized_sha256": "7b2300a7532907faf8b72ec18bd7136d821b303b4117f8dce6cae82a731adeaf"
+    },
+    "luzzy-page/tools/verify-no-hooks.cjs": {
+      "sha256": "4e733393da3b2513e57a00d30ff6b576b246cf69a02e903e64795d2f1c9eeae0",
+      "size": 2219,
+      "normalized_sha256": "4e733393da3b2513e57a00d30ff6b576b246cf69a02e903e64795d2f1c9eeae0"
+    },
+    "luzzy-preset/README.md": {
+      "sha256": "67855b94e12a04c6349dc47b1b6b9f7d62b16b2933eb5f188a560875ac7d0607",
+      "size": 5971,
+      "normalized_sha256": "67855b94e12a04c6349dc47b1b6b9f7d62b16b2933eb5f188a560875ac7d0607"
+    },
+    "luzzy-preset/agent.cordis.yml": {
+      "sha256": "1e2c8dac84fada935d9f7c4b0cff096c4a2ba7214dccb7e11fd6eedf06acee25",
+      "size": 14443,
+      "normalized_sha256": "1e2c8dac84fada935d9f7c4b0cff096c4a2ba7214dccb7e11fd6eedf06acee25"
+    },
+    "luzzy-preset/lib/default-prompt.md": {
+      "sha256": "3eb7df1fb3e0a75921bc3a9dd5eccbae7269cc719da0f97eacc9818b556541d7",
+      "size": 523,
+      "normalized_sha256": "3eb7df1fb3e0a75921bc3a9dd5eccbae7269cc719da0f97eacc9818b556541d7"
+    },
+    "luzzy-preset/lib/persona.mjs": {
+      "sha256": "93bbc6ab77772407fed3e7a47f2b3db47ca61fcec0981fd3cce22c47bbe34782",
+      "size": 4342,
+      "normalized_sha256": "93bbc6ab77772407fed3e7a47f2b3db47ca61fcec0981fd3cce22c47bbe34782"
+    },
+    "luzzy-preset/lib/preset-store.mjs": {
+      "sha256": "ea347412c19ccc772e954c7184a451373875fe968bfde96b4a05d7c3d6fa3df4",
+      "size": 25918,
+      "normalized_sha256": "ea347412c19ccc772e954c7184a451373875fe968bfde96b4a05d7c3d6fa3df4"
+    },
+    "luzzy-preset/preset.yml": {
+      "sha256": "17a32758b13989b0f6d8d9c6d370f8c2ce078d0c040593f0501015010755a603",
+      "size": 605,
+      "normalized_sha256": "17a32758b13989b0f6d8d9c6d370f8c2ce078d0c040593f0501015010755a603"
+    },
+    "skills/luzzy-roster-design-compose/LICENSE": {
+      "sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45",
+      "size": 1074,
+      "normalized_sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45"
+    },
+    "skills/luzzy-roster-design-compose/SKILL.md": {
+      "sha256": "b61da3bbe265ee6691571ec1076012e76a2c3d13288a05e2b0a881fbf7b66f3c",
+      "size": 3309,
+      "normalized_sha256": "b61da3bbe265ee6691571ec1076012e76a2c3d13288a05e2b0a881fbf7b66f3c"
+    },
+    "skills/luzzy-roster-design-compose/triggers.json": {
+      "sha256": "d76f164fd57b7cf575af7a7435fb015377667f3eb4056e4565cb4347373e6334",
+      "size": 550,
+      "normalized_sha256": "d76f164fd57b7cf575af7a7435fb015377667f3eb4056e4565cb4347373e6334"
+    },
+    "skills/luzzy-roster-design-react/LICENSE": {
+      "sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45",
+      "size": 1074,
+      "normalized_sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45"
+    },
+    "skills/luzzy-roster-design-react/SKILL.md": {
+      "sha256": "c8bc2cd5220c99fbc8e9db80cd5617fdfb0275a1776ad026b218371305db1df1",
+      "size": 3216,
+      "normalized_sha256": "c8bc2cd5220c99fbc8e9db80cd5617fdfb0275a1776ad026b218371305db1df1"
+    },
+    "skills/luzzy-roster-design-react/triggers.json": {
+      "sha256": "b8be65451fdaba87a0355190cd6b5b2d157a0e25c7be11e3edece0b55890da0a",
+      "size": 539,
+      "normalized_sha256": "b8be65451fdaba87a0355190cd6b5b2d157a0e25c7be11e3edece0b55890da0a"
+    },
+    "skills/luzzy-roster-design-vue/LICENSE": {
+      "sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45",
+      "size": 1074,
+      "normalized_sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45"
+    },
+    "skills/luzzy-roster-design-vue/SKILL.md": {
+      "sha256": "19cb46eeac779f76f5867c76a46efce4888eb49282824a0e5079588d6b713e8c",
+      "size": 3162,
+      "normalized_sha256": "19cb46eeac779f76f5867c76a46efce4888eb49282824a0e5079588d6b713e8c"
+    },
+    "skills/luzzy-roster-design-vue/triggers.json": {
+      "sha256": "d9be59a4ba39198a12480c45dfacb7d8346e60ed19c9a11bbd31ffe2789eeadd",
+      "size": 529,
+      "normalized_sha256": "d9be59a4ba39198a12480c45dfacb7d8346e60ed19c9a11bbd31ffe2789eeadd"
+    },
+    "skills/luzzy-roster-design/LICENSE": {
+      "sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45",
+      "size": 1074,
+      "normalized_sha256": "6e60fee93b8209f1e1d9dd80149db5399688af648da5fa5f5c3388b7e3c72a45"
+    },
+    "skills/luzzy-roster-design/SKILL.md": {
+      "sha256": "d1f38be973b4e1dded63008711867143fb801217a0dc3076ee3571e2aba4baec",
+      "size": 4762,
+      "normalized_sha256": "d1f38be973b4e1dded63008711867143fb801217a0dc3076ee3571e2aba4baec"
+    },
+    "skills/luzzy-roster-design/triggers.json": {
+      "sha256": "8f53994523a58e9dc9e61b78d8441ca5d304000e46b6f860e02ec1171246f8b4",
+      "size": 651,
+      "normalized_sha256": "8f53994523a58e9dc9e61b78d8441ca5d304000e46b6f860e02ec1171246f8b4"
+    }
+  },
+  "managed_scope": {
+    "version": "managed-scope-baseline/v1",
+    "policy_identity": "76252098994eae2f11ad3d178f0fba3281afa1997bb53a298b99e95f1effaf3a",
+    "observe_change_policy": "review_required",
+    "budget_policy_identity": "15e9b37a6c57e9bf03c9df3d0d049eb5b9a7f5540f9d34960408114e2538a32d",
+    "budget_policy": {
+      "version": "cognition-budget-policy/v1",
+      "mode": "enforce",
+      "whole_index": {
+        "target_tokens": 200000,
+        "warning_tokens": 300000,
+        "max_tokens": 400000
+      },
+      "r": [
+        {
+          "min_c": 1,
+          "max_c": 4,
+          "target_tokens": 25,
+          "max_tokens": 50
+        },
+        {
+          "min_c": 5,
+          "max_c": 7,
+          "target_tokens": 45,
+          "max_tokens": 90
+        },
+        {
+          "min_c": 8,
+          "max_c": 8,
+          "target_tokens": 70,
+          "max_tokens": 140
+        },
+        {
+          "min_c": 9,
+          "max_c": 9,
+          "target_tokens": 90,
+          "max_tokens": 180
+        }
+      ],
+      "s": [
+        {
+          "min_c": 1,
+          "max_c": 4,
+          "target_tokens": 20,
+          "max_tokens": 40
+        },
+        {
+          "min_c": 5,
+          "max_c": 7,
+          "target_tokens": 40,
+          "max_tokens": 80
+        },
+        {
+          "min_c": 8,
+          "max_c": 8,
+          "target_tokens": 70,
+          "max_tokens": 140
+        },
+        {
+          "min_c": 9,
+          "max_c": 9,
+          "target_tokens": 100,
+          "max_tokens": 200
+        }
+      ]
+    },
+    "apply_authorization_mode": "auto"
+  }
+}
