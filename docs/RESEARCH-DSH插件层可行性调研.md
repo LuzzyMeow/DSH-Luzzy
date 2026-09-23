@@ -830,6 +830,104 @@ tools/pre-execute        → 准入（本项目已有的那道门）
 
 ---
 
+## 九、技能清单提示词能否懒加载（2026-09-23 实测复核）
+
+**问的问题**：能不能把「技能清单相关提示词」从常驻改成懒注入，当 Agent 走到状态链的第二步
+（技能分支）时再注入，选中之后才注入那份 skill 的正文 —— 以省 token。
+
+**结论：不需要做，因为 DSH 层已经是这个样子；而真正费 token 的东西不是被问的那一处。**
+
+### 九.1 被问的那一处有多大（实测）
+
+| 内容 | 字符 | 位置 |
+|---|---|---|
+| `§1.1.6` 十七类清单表 + `§1.1.6.1` 框架子项 | **2,922** | `LuzzyPrompt/prompt/Luzzy.md` L247–285 |
+| 整个 `§1.1`（硬门 / 回执 / 阅读规则 / 反假读 / 分诊 / 认知门 / 清单 / 解析 / 触发口径 / 阅读顺序） | **11,562** | L126–342 |
+
+`§1.1.6` 表是**指向 roster skill 的索引**。把它移出提示词，就变成「要读 skill 才知道该读哪个
+skill」—— `LuzzyPrompt/AGENTS.md` 第 14 与第 51 行、`prompt/Luzzy.md` §1.1 三处都明文禁止这种
+下沉（规则只住提示词，skill 只装「怎么做」）。**收益约 1k token，代价是拆掉整套必读清单硬门。**
+
+### 九.2 DSH 自己的技能目录：已经是懒加载，但很大
+
+读 `@deepseek-ai/dsh-tool-skill/lib/index.js`（本机安装字节）：
+
+- L168 / L203 两个 `ctx.on("agent/pre-step", …)` 监听器
+- L217–235：按 **digest** 去重；目录没变就**不重发**，变了才发一份 `renderCatalogUpdate`
+- L238–261 `renderCatalogMessage` / L262–284 `renderCatalogUpdate`：产出一条
+  `createUserMessage({ source: { kind: 'skill-catalog' } })` —— 即**独立的 user message**
+- L359–361 `catalogDescription`：`description` 按 `catalogDescriptionMaxLength` 截断
+- L49：`Config = z.object({ catalogDescriptionMaxLength: z.number().default(500) })`
+
+**所以「技能目录懒加载」这件事已经发生了。** 但它作为一条 **message 进会话前缀**，一旦发出，
+之后每个请求都要重新携带 —— 目录越大，每轮都付。
+
+`@deepseek-ai/dsh-skill-filesystem/lib/index.js` L31–33 / L77–78：`includeDefaultRoots` 默认
+`true`，扫 `~/.agents/skills` **与** `~/.claude/skills` 两处。
+
+### 九.3 实测体量（`tools/measure-skill-catalog.mjs`）
+
+本机两处根目录共 **176 个不同 skill**（20 个撞到 500 字符上限）：
+
+| `catalogDescriptionMaxLength` | 渲染后字符 | 估算 token |
+|---|---|---|
+| **500（当前默认）** | **~54,965** | **~18,300 – 32,300** |
+| 200 | ~33,220 | ~11,100 – 19,500 |
+| 120 | ~23,489 | ~7,800 – 13,800 |
+| 80 | ~17,480 | ~5,800 – 10,300 |
+
+**对照**：被问的 `§1.1.6` 表是 2,922 字符（~1.0k–1.7k token）。技能目录是它的 **约 19 倍**。
+
+### 九.4 能做的事（按收益排序，全部未实施 —— 需用户裁决）
+
+1. **调 `catalogDescriptionMaxLength`**：在预设的 `tool-skill` 行加 `config`。500 → 80 省下
+   约 3.7 万字符 ≈ 1.2 万–2.2 万 token／轮。**代价**：描述变短后模型更可能挑错 skill
+   （目录是它唯一的选型依据）。**这是一个判断，不是一个数字** —— 见 §九.5。
+2. **收窄 skill 根**：`includeDefaultRoots: false` + 只指向真正要暴露的目录。本机 176 个
+   skill 里绝大多数与 LuzzyMode 无关。
+3. **`§1.1.6` 表不动**：理由见 §九.1。
+
+### 九.5 一条必须说清的分界
+
+「省 token」与「选得准」在这里是**同一根轴的两端**：目录是模型唯一能看见的选型依据，
+把描述砍短就是在减少它的决策信息。HanaAgent 的 reminder 做法（用户提的参照物）
+之所以可行，是因为它的技能面**小**；176 个 skill 是另一个量级。
+
+所以本文**只给表，不给建议值** —— 该砍到多少，取决于「模型选错 skill」与「每轮多付两万
+token」哪一边更痛，那是产品判断，不是实测能回答的。
+
+---
+
+## 十、三份 skill 副本的漂移（2026-09-23 实测）
+
+`§1.1.7` 规定了「多副本不一致时以较新为准，并向用户提一句」—— 本次实测**真的存在不一致**：
+
+| 副本 | 路径 | `luzzy-roster-design` 版本 | 时间 |
+|---|---|---|---|
+| 仓库 | `DSH Plugin/skills/` | **1.1.0** | 09-16 12:31 |
+| harness | `~/.agents/skills/` | **1.0.0** | 09-16 11:58 |
+| 上游 | `LuzzyPrompt/skills/` | **1.1.0** | 09-16 12:31 |
+
+其余三个设计类 skill（react / vue / compose）三处逐字节相同。**只有 `luzzy-roster-design`
+一份 stale**，且 harness 目录里那份是旧的。
+
+**推论**：任何按 `§1.1.7` 顺序解析、命中第 2 步（harness 目录）的读取，拿到的都是 v1.0.0。
+本次会话开头读的是**仓库副本**（第 1 步），所以未受影响 —— 但这是运气，不是机制。
+
+**未实施**：是否把 harness 那份升到 1.1.0，需要用户裁决（那是用户机器的 skill 目录）。
+
+### 十.1 人格提示词的实际来源（同时实测）
+
+| 路径 | SHA256 | 字符 |
+|---|---|---|
+| `LuzzyPrompt/prompt/Luzzy.md` | `AADE287580DCFE49` | 58,562 |
+| `~/.dsh/luzzy-preset/agents/luzzy.md`（活动人格） | `AADE287580DCFE49` | 58,562 |
+
+**逐字节相同。** 即 `LuzzyPrompt` 已经是活动人格的**内容源**，两者之间缺的不是「合并」，
+而是一条**引用关系**（现在靠手工同步，没有任何机制保证它们一致）。
+
+---
+
 ## 八、来源台账
 
 | 类别 | 来源 | 用途 |
