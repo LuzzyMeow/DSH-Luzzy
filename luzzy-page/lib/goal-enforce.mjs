@@ -77,7 +77,7 @@
 
 import { randomUUID } from 'node:crypto'
 
-import { applyDeliveryOp, completionGate, needsReconciliation, nextId, renderCompletionRefusal, summarize } from './goal-domain.mjs'
+import { applyDeliveryOp, completionGate, missingGoalFields, needsReconciliation, nextId, renderCompletionRefusal, summarize } from './goal-domain.mjs'
 import { readDeliveryOverlay, writeDeliveryOverlay } from './goal-store.mjs'
 
 /** Attribution for everything this plugin injects. NEVER `{kind:'user'}`. */
@@ -161,9 +161,29 @@ export const DEFAULT_ENFORCE_OPTIONS = Object.freeze({
    * `1` would fire on every step of a long turn — the "注意力浪费" §47 warns about. The block
    * is cheap but not free, and a model that just read it three seconds ago does not need it
    * again. `6` is a compromise: on a short turn it fires once at the start; on a long turn it
-   * refreshes often enough that a model which has drifted gets pulled back.
+   * refreshes often enough that a model that has drifted gets pulled back.
+   *
+   * This is the FLOOR, not the whole policy: `initial`, `onGoalChange` and `afterFailure` in
+   * `injectionPolicy` fire regardless of it. A fixed interval alone cannot express "the goal
+   * just changed, say so NOW".
    */
   preflightEverySteps: 6,
+  /**
+   * Whether a session with no goal is held at the goal gate before it may act.
+   *
+   * This is the v2 upgrade: without it the layer only ever ASKS the model to notice the goal
+   * (§6's nudge), which is guidance, not a gate. With it, a session that has not yet reached a
+   * decision about its goal cannot start changing things.
+   */
+  sessionGate: true,
+  /**
+   * Steps before a session with no goal may be asked again for its intent.
+   *
+   * The v1 behaviour was once per session. That is wrong in the case it matters most: the model
+   * declines while it is still gathering context, and the gate then never speaks again, so the
+   * session runs to completion with no goal by accident rather than by decision.
+   */
+  goalReminderEverySteps: 20,
   /** Whether a turn that changed the workspace may be asked to reconcile its plan. */
   reconcile: true,
   /** Whether `get_goal` gains the plan summary. */
@@ -173,6 +193,24 @@ export const DEFAULT_ENFORCE_OPTIONS = Object.freeze({
   /** Minimum milliseconds between two reconciliation steers in one session. */
   minReconcileIntervalMs: 60_000,
 })
+
+/**
+ * Tools the session gate must let through, because they are how a session LEAVES the gate.
+ *
+ * Everything else waits. The distinction is not "read vs write" — the user asked for a gate
+ * that holds ALL work tools — it is "does this tool make progress possible" against "does this
+ * tool make changes". A gate that also blocked these would be a deadlock: the model could not
+ * create the goal it is being asked for, and could not ask the user the question the gate
+ * tells it to ask.
+ *
+ *   goal_delivery       the goal lifecycle itself (create/update/complete)
+ *   get_goal            reading the goal it may already have
+ *   ask_user_question   §5's clarification path — the gate's own escape hatch
+ *   todo_write          planning, not execution; the brief's §17 treats tasks as the plan
+ */
+export const GATE_PASS_TOOLS = Object.freeze(
+  new Set(['goal_delivery', 'create_goal', 'get_goal', 'update_goal', 'ask_user_question', 'todo_write']),
+)
 
 /**
  * Read one optional DSH service.
@@ -277,8 +315,32 @@ function counterFor(sessionId) {
       preflights: 0,
       preflightMisses: 0,
       lastPreflightTurn: -1,
-      goalNudged: false,
       lastPreflightStep: -999,
+      /**
+       * v1 rate-limited the no-goal nudge to ONCE PER SESSION. Measured against the case that
+       * matters most, that is backwards: a model that declines while still gathering context
+       * silences the gate forever, so the session finishes with no goal by accident rather
+       * than by decision. Now it re-asks once the session has moved on.
+       */
+      lastGoalNudgeStep: -999,
+      /**
+       * How many times this session was asked for its intent. Kept as a COUNT rather than the
+       * v1 boolean because the interesting question is not "was it asked" but "was it asked
+       * and still ignored" — a session nudged four times with no goal is a session the gate
+       * is failing to reach, and a boolean cannot show that.
+       *
+       * Initialised rather than left undefined so the counters block has a STABLE SHAPE from
+       * the first read: `test-goal-routes` pins that shape, and a key that appears only after
+       * the first nudge would make "no nudges yet" indistinguishable from "field renamed".
+       */
+      goalNudgeCount: 0,
+      /** Whether the model answered "this is not a task" — the gate's second exit. */
+      nonTaskDeclared: false,
+      /** Diagnostic only: how many calls the gate refused for this session. */
+      gateBlocks: 0,
+      /** Step of the injection that last carried a given goal revision. */
+      lastInjectedRevision: null,
+      lastInjectedStep: -999,
     }
     counters.set(sessionId, entry)
   }
@@ -406,13 +468,18 @@ export function deliverySummary(delivery, goal, extra = {}) {
  *
  * @param {object} delivery - normalized overlay.
  * @param {object} goal - the live goal view.
- * @param {{artifactPath?: string}} [meta]
+ * @param {{artifactPath?: string, changedSinceLastInjection?: boolean}} [meta]
  * @returns {string} a `<goal_state>` block.
  */
 export function renderPreflight(delivery, goal, meta = {}) {
   const summary = summarize(delivery, goal)
   const gate = completionGate(delivery, goal)
   const lines = ['<goal_state>']
+  if (meta.changedSinceLastInjection === true) {
+    // The model has seen an older revision of this goal. Naming that is the difference between
+    // "the harness is repeating itself" and "the goal moved under you, re-read it".
+    lines.push('（目标自上次下发后已变更——以这一段为准。）')
+  }
   lines.push(`目标：${JSON.stringify(goal.objective)}`)
   lines.push(`阶段：${goal.phase}${goal.phase === 'active' ? `（续行${goal.activation === 'armed' ? '已启用' : '未启用'}）` : ''} · 修订 ${goal.revision} · 轮次 ${goal.roundsStarted}/${goal.maxGoalRounds}`)
 
@@ -449,6 +516,112 @@ export function renderPreflight(delivery, goal, meta = {}) {
 }
 
 /**
+ * Render the refusal the session gate returns when a session tries to act with no goal.
+ *
+ * This is a TOOL ERROR, not a system-prompt sentence, and that changes what it has to do. The
+ * model reads it at the moment it wanted to act, so it must answer "why not", "what now", and
+ * — because the gate has two exits and the model cannot see the state machine — "how do I get
+ * out". A refusal that only says "blocked" would leave the model looping.
+ *
+ * @param {string} toolName - the call that was refused.
+ * @param {object} entry - this session's counters.
+ * @returns {string} refusal reason.
+ */
+export function renderGateRefusal(toolName, entry) {
+  const lines = [
+    `GOAL_GATE_REQUIRED: 这个会话还没有目标，所以「${toolName}」暂时不能执行。`,
+    '',
+    '这不是故障，是启动协议：动手之前先确定要交付什么。**你没有卡住，只需要先做一个选择**：',
+    '',
+    '1. **这是长期工作** → 先建目标，再动手。用 `create_goal` 写下：',
+    '   - 目标、背景与交付结果（要完成什么、为什么做、最终得到什么）',
+    '   - **验收标准至少一条**（怎样才算完成——没有它，「完成」无法判断），用 `' +
+      DELIVERY_TOOL +
+      '(action="addAcceptance")` 记下',
+    '   - **范围边界**（不做什么——防止越做越大），用 `proposeScope`',
+    '   - 已知约束（不能碰什么、必须用什么），用 `proposeConstraints`',
+    '   缺哪项就先用 ask_user_question 问用户，不要自己替他填。',
+    '2. **这是一次性问答或闲聊** → 用',
+    `   \`${DELIVERY_TOOL}(action="declareNonTask", reason="…")\` 说清楚，然后继续。`,
+    '   判据：不需要跨多轮、不需要验收标准、改坏了也无所谓——那就是闲聊。',
+    '',
+    '「你好」「解释一下 Promise」属于第 2 种，不该建目标；「重构这个项目」「修所有测试」属于第 1 种。',
+    '',
+    '在做出这个选择之前，只有下面这些还能用：目标工具、ask_user_question、todo_write。',
+    '读代码、跑命令、改文件都要等到目标确定之后。',
+  ]
+  if (entry.gateBlocks >= 4) {
+    // Escalation. By the fourth refusal the model is not thinking about the choice — it is
+    // retrying the same call. Name that behaviour instead of repeating the same paragraph.
+    lines.push('')
+    lines.push(
+      `（这是本会话第 ${entry.gateBlocks} 次被拦。重复调用同一个工具不会改变结果——` +
+        '要么建目标，要么声明这是闲聊。如果判断不了，用 ask_user_question 问用户。）',
+    )
+  }
+  return lines.join('\n')
+}
+
+/**
+ * Render the refusal for a goal that exists but is not yet answerable.
+ *
+ * Distinct from `renderGateRefusal` on purpose: "you have no goal" and "your goal cannot say
+ * when it is done" are different problems with different fixes, and a model that gets the
+ * wrong one will create a second goal instead of filling in the first.
+ *
+ * @param {string} toolName - the call that was refused.
+ * @param {string[]} missing - field names from `missingGoalFields`.
+ * @param {object} entry - this session's counters.
+ * @returns {string} refusal reason.
+ */
+export function renderIncompleteGoalRefusal(toolName, missing, entry) {
+  const lines = [
+    `GOAL_INCOMPLETE: 目标已经建了，但还缺 ${missing.length} 项，「${toolName}」暂时不能执行。`,
+    '',
+    `缺：${missing.join('、')}`,
+    '',
+    '先补齐再动手——现在补一句话，事后返工一整轮。',
+    '',
+    '  · **验收标准**：怎样才算完成？一条也算（`goal_delivery(action="addAcceptance", payload={description})`）。',
+    '  · **范围边界**：什么不做？（`proposeScope`，included / excluded 任一非空即可）',
+    '  · **已知约束**：不能碰什么、必须用什么？（`proposeConstraints`）',
+    '',
+    '后两项只能**提议**——范围与约束归用户决定（§24/§65），所以提出去就算你答过了，',
+    '**不需要等他批准才继续**。真正没有约束的话，把「无」作为一条记下来，那也是答案。',
+    '',
+    '拿不准的**用 ask_user_question 问用户，不要自己替他定**——他要的和他想的不一样时，',
+    '只有他能回答。',
+  ]
+  if (entry.gateBlocks >= 4) {
+    lines.push('')
+    lines.push(
+      `（这是本会话第 ${entry.gateBlocks} 次被拦。缺的就是上面那几项，` +
+        '重复调用工具不会让它们出现。）',
+    )
+  }
+  return lines.join('\n')
+}
+
+/**
+ * Read a "this exchange is not a task" declaration out of a `goal_delivery` call.
+ *
+ * The model supplies the JUDGEMENT (§39) and this reads it out as a fact, so the gate never
+ * has to parse prose. It is deliberately narrow: one action name, one required reason. A
+ * loose matcher here would let a model escape the gate by accident, and the gate's whole
+ * value is that escaping it is a deliberate act.
+ *
+ * @param {unknown} args - the tool call's arguments.
+ * @returns {{reason: string}|null} the declaration, or null when this is not one.
+ */
+export function readNonTaskDeclaration(args) {
+  if (typeof args !== 'object' || args === null) return null
+  if (args.action !== 'declareNonTask') return null
+  const reason = typeof args.reason === 'string' ? args.reason.trim() : ''
+  if (reason === '') return null
+  return { reason }
+}
+
+/**
  * Render the "you are doing real work with no goal" nudge (AC-001).
  *
  * Deliberately a QUESTION with a decision procedure, not an instruction to create a goal. §6
@@ -456,19 +629,36 @@ export function renderPreflight(delivery, goal, meta = {}) {
  * explanation — only the model can. So the harness reports the fact it observed (mutating
  * tools ran) and hands the judgement back.
  *
+ * There is also a TOOL for answering it (see `readNonTaskDeclaration`): when the session gate
+ * is on, "ignore this" is no longer an option the model can take silently, because the gate
+ * will keep refusing its next work tool. The nudge therefore has to name the exit, or the
+ * model has a rule it cannot satisfy and no way to say so.
+ *
  * @param {{toolCalls: number}} work - what `observeTurn` saw.
+ * @param {number} [count] - which reminder this is (1-based). Only changes the wording.
  * @returns {string}
  */
-export function renderGoalNudge(work) {
-  return [
+export function renderGoalNudge(work, count = 1) {
+  const lines = [
     '<goal_hint>',
     `本次会话已经跑了 ${work.toolCalls} 次工具调用并改动了工作区，但还没有目标。`,
     '如果这是一件需要跨多轮、可恢复、可中断的长期工作，现在建一个目标：调用 create_goal，',
     '并在目标里写清「什么条件满足才算完成」——没有验收标准，完成与否无法判断。',
-    '如果只是一次性的问答或小改动，忽略这条，不要建目标。',
     '建完目标后用 goal_delivery 记下范围与验收标准。',
-    '</goal_hint>',
-  ].join('\n')
+    '',
+    '如果只是一次性的问答或闲聊，别沉默地忽略这条——用',
+    '`goal_delivery(action="declareNonTask", reason="…")` 明确说一句，然后照常继续。',
+    '（判据：不需要跨多轮、不需要验收标准、改坏了也无所谓——那就是闲聊。）',
+  ]
+  if (count > 1) {
+    lines.push('')
+    lines.push(
+      `（这是本会话第 ${count} 次提醒。上一次没有回应，而工作区一直在被改动——` +
+        '如果确实没有目标，就用上面那个工具说清楚；有目标就现在建。）',
+    )
+  }
+  lines.push('</goal_hint>')
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------- layer 4: preflight
@@ -498,6 +688,15 @@ export function installEnforcement(ctx, deps) {
     driftDetected: 0,
     evidenceMissing: 0,
     revisionConflict: 0,
+    /**
+     * §86's list stops at "goal.preflight.count / miss". This is the v2 counterpart: how often
+     * a session was actually HELD at the gate. A gate whose count is always zero is not a gate.
+     */
+    gateBlocked: 0,
+    /** Sessions that reached the gate and answered "this is not a task". */
+    nonTaskDeclared: 0,
+    /** Injections that fired because the goal revision moved, not because the interval did. */
+    preflightOnChange: 0,
   }
 
   // ---- layer 4: orient the model before it works ---------------------------
@@ -535,36 +734,59 @@ export function installEnforcement(ctx, deps) {
         entry.preflightMisses += 1
         // ---- AC-001: a long task should get a goal --------------------------
         //
-        // §6 asks the harness to decide whether the request is long-running work and create a
-        // goal for it, while §39 puts "is this a long task?" in the MODEL-JUDGEMENT column
-        // rather than the deterministic one. Those two fit together like this: the harness
-        // supplies the DETERMINISTIC half of the signal — the session log shows real mutating
-        // work — and the model makes the semantic call about whether it is a durable goal.
+        // §6 asks the harness to decide whether the request is long-running work; §39 puts
+        // "is this a long task?" in the MODEL-JUDGEMENT column instead. The split is: the
+        // harness supplies the DETERMINISTIC half of the signal — the session log shows real
+        // mutating work — and the model makes the semantic call about whether it is a durable
+        // goal.
         //
         // So this does not create a goal. It tells the model that work is happening with no
         // goal attached and asks it to judge. Auto-creating would be worse than useless: §6 is
         // explicit that "你好" and "帮我解释一下 Promise" must NOT get one, and a rule that
         // fires on tool calls alone cannot tell those apart from a refactor.
         //
-        // Rate-limited to ONCE per session. A nudge that repeats every step is the token waste
-        // §83 warns about, and a model that declined the first one has its reasons.
-        if (entry.goalNudged) return decision
+        // v1 rate-limited this to ONCE PER SESSION, and that was wrong in the case it exists
+        // for. A model that declines while it is still gathering context silences the reminder
+        // for the rest of the session, so the session ends with no goal by ACCIDENT rather than
+        // by decision — and the whole point of AC-001 is that the choice gets made. Now the
+        // reminder is per PHASE: it re-asks once the session has moved on, while still not
+        // repeating on every step (§83's token discipline).
+        if (step - entry.lastGoalNudgeStep < options.goalReminderEverySteps) return decision
         const work = observeTurn(agent)
         if (!work.wroteFiles && !work.ranCommand) return decision
-        entry.goalNudged = true
+        entry.lastGoalNudgeStep = step
+        entry.goalNudgeCount = (entry.goalNudgeCount ?? 0) + 1
         stats.goalNudged += 1
         return {
           ...decision,
           messages: [
             ...decision.messages,
-            pluginNotice(renderGoalNudge(work), '没有目标'),
+            pluginNotice(renderGoalNudge(work, entry.goalNudgeCount), '没有目标'),
           ],
         }
       }
-      if (entry.lastPreflightTurn === turn && step - entry.lastPreflightStep < options.preflightEverySteps) {
-        // Already oriented this turn, recently enough. This is the token control.
-        return decision
-      }
+      // ---- injection policy: WHY to inject, not just how often --------------
+      //
+      // A fixed interval is the wrong shape for the two cases that matter. It cannot say "the
+      // goal just changed, tell the model NOW", and it cannot say "this is the first turn, the
+      // model has certainly not seen this goal yet". Both of those want an injection
+      // REGARDLESS of the step counter, and both are cheap to detect deterministically:
+      //
+      //   initial   the session has never been oriented
+      //   on-change the goal's revision differs from the one last injected
+      //   interval  the fallback, for a long turn that is simply still running
+      //
+      // §83 still governs: these are reasons to fire, not a licence to fire constantly. The
+      // revision case is self-limiting (revisions change when something changed), and the
+      // interval case is the throttle the model already had.
+      const lastRevision = entry.lastInjectedRevision
+      const thisRevision = resolved.goal.revision
+      const isInitial = entry.preflights === 0
+      const changed = lastRevision !== null && lastRevision !== thisRevision
+      const dueByInterval =
+        !(entry.lastPreflightTurn === turn && step - entry.lastPreflightStep < options.preflightEverySteps)
+
+      if (!isInitial && !changed && !dueByInterval) return decision
 
       const read = readDeliveryOverlay(paths, sessionId)
       if (!read.ok) {
@@ -576,17 +798,100 @@ export function installEnforcement(ctx, deps) {
       entry.lastPreflightTurn = turn
       entry.lastPreflightStep = step
       entry.preflights += 1
+      entry.lastInjectedRevision = thisRevision
       stats.preflight += 1
+      if (changed) stats.preflightOnChange += 1
 
       const artifact = deps.artifacts?.describe(sessionId) ?? undefined
-      const text = renderPreflight(read.delivery, resolved.goal, { artifactPath: artifact?.path })
+      // A revision the model has not seen is the one case where "what changed" is worth the
+      // bytes: the block already carries the revision, and saying WHY it is being repeated
+      // stops the model from reading a second injection as noise.
+      const text = renderPreflight(read.delivery, resolved.goal, {
+        artifactPath: artifact?.path,
+        changedSinceLastInjection: changed,
+      })
       return {
         ...decision,
         messages: [
           ...decision.messages,
-          pluginNotice(text, '目标状态'),
+          pluginNotice(text, changed ? '目标已更新' : '目标状态'),
         ],
       }
+    })
+  }
+
+  // ---- the session gate ----------------------------------------------------
+  //
+  // THE v2 UPGRADE. Everything above ORIENTS: it tells the model where the goal stands and
+  // asks it to notice. That is guidance. This is the part that makes the layer a gate.
+  //
+  // The placement is the whole design, and it is NOT where the brief's §8 sketch puts it.
+  // A `reject` from `agent/pre-step` does not refuse an action — the loop turns it into
+  // `turnEnds = {kind:'blocked'}` and ends the TURN before the model ever speaks
+  // (`dsh-agent-loop` L937-944). So gating at pre-step gives the user a dead turn instead of
+  // the goal interview the brief actually wants. Denying at `tools/pre-execute` instead
+  // returns the refusal as that call's error result, and the model keeps talking in the same
+  // turn — which is what makes "block the action, allow the conversation" possible at all.
+  //
+  // A gate is only a gate if it can refuse. The three answers it accepts:
+  //   1. the session has a goal                      -> let everything through
+  //   2. the model declared this a non-task exchange -> let everything through, and remember
+  //   3. anything else                               -> refuse the call, say how to proceed
+  //
+  // (2) exists because §39 puts "is this a long task?" in the MODEL-JUDGEMENT column, and
+  // §6 is explicit that "你好" must not be forced into a goal. The harness contributes the
+  // deterministic half: it owns the state machine and the refusal, and it reads the model's
+  // answer out of a tool call rather than out of prose (see `declareNonTask`).
+  if (options.sessionGate) {
+    ctx.on('tools/pre-execute', async (exec, next) => {
+      const decision = await next()
+      if (decision.kind !== 'allow') return decision
+      if (exec.agent === undefined) return decision
+      const sessionId = exec.agent.session?.id
+      if (typeof sessionId !== 'string') return decision
+      const entry = counterFor(sessionId)
+
+      // The exits are tools, so they must pass BEFORE the gate can refuse anything — including
+      // the refusal's own escape hatch (`ask_user_question`). Refusing those would deadlock:
+      // the model could not create the goal it is being asked for.
+      if (GATE_PASS_TOOLS.has(exec.name)) {
+        // Reading or writing the goal is itself the answer to "does this session have one".
+        if (exec.name === 'goal_delivery' || exec.name === 'create_goal') entry.gateSatisfiedAt = Date.now()
+        // ...and declaring "this is not a task" is the OTHER answer. It has to be readable
+        // from a tool call rather than from prose: a model that says "this is just a chat" in
+        // a sentence and then edits a file anyway must still be held, and text matching over
+        // free-form reasoning is exactly the fragile judgement §39 hands to the model. An
+        // explicit, well-formed call is a deterministic fact the harness can trust.
+        if (exec.name === 'goal_delivery' && readNonTaskDeclaration(exec.arguments) !== null) {
+          if (!entry.nonTaskDeclared) stats.nonTaskDeclared += 1
+          entry.nonTaskDeclared = true
+        }
+        return decision
+      }
+
+      const resolved = liveGoalFor(ctx, exec.agent)
+      if (resolved.state === 'ok' && resolved.goal !== undefined) {
+        // A goal EXISTS — but a goal with no acceptance criteria, no scope and no constraints
+        // cannot answer "when is this done", so opening the gate on it would just move the
+        // failure later, to the completion gate, after the work is already built. The brief's
+        // §20 refuses completion on an empty plan; refusing to START on one is the same check
+        // applied where it is still cheap to act on. This is the "必须填补所有缺失项" rule.
+        const read = readDeliveryOverlay(paths, sessionId)
+        if (read.ok) {
+          const missing = missingGoalFields(read.delivery)
+          if (missing.length === 0) return decision
+          stats.gateBlocked += 1
+          entry.gateBlocks += 1
+          return { kind: 'deny', reason: renderIncompleteGoalRefusal(exec.name, missing, entry) }
+        }
+      }
+      // A session whose goal was deleted mid-flight is back at the gate. That is deliberate:
+      // "no goal" is the condition, not "never had one".
+      if (entry.nonTaskDeclared) return decision
+
+      stats.gateBlocked += 1
+      entry.gateBlocks += 1
+      return { kind: 'deny', reason: renderGateRefusal(exec.name, entry) }
     })
   }
 

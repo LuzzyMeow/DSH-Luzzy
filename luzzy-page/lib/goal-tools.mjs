@@ -73,6 +73,7 @@ const ACTION_DESCRIPTIONS = {
   proposeConstraints: 'payload: {constraints[], reason?, impact?} — propose a change to constraints. Requires user confirmation.',
   withdrawProposal: 'payload: {id} — withdraw your own pending proposal P-nnn.',
   reconcile: 'payload: {goalId, goalRevision, objective?} — adopt the current runtime goal revision as the plan baseline after the goal was edited.',
+  declareNonTask: 'payload: {reason} — declare this session a one-off question or casual exchange, NOT long-running work, so the goal gate stops requiring a goal. Use it for a greeting, an explanation, a quick lookup — things with no acceptance criteria that cannot be "delivered". Say WHY in reason. Do not use it to dodge a real task.',
 }
 
 export const ACTIONS = Object.freeze(Object.keys(ACTION_DESCRIPTIONS))

@@ -846,13 +846,18 @@ try {
     const withGate = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
     enforce.resetCounters()
     enforce.installEnforcement(withGate, { paths, options: {} })
-    check('with the gate on, a pre-execute listener is installed',
-      (withGate.listeners.get('tools/pre-execute') || []).length === 1)
+    // TWO registrants now: the completion gate and the session gate. Both are on by default,
+    // and the count is the cheap way to prove neither silently failed to install.
+    eq('with the gates on, both pre-execute listeners are installed',
+      (withGate.listeners.get('tools/pre-execute') || []).length, 2)
 
     const withoutGate = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
     enforce.resetCounters()
-    enforce.installEnforcement(withoutGate, { paths, options: { blockCompletion: false } })
-    eq('with the gate off, nothing is installed', (withoutGate.listeners.get('tools/pre-execute') || []).length, 0)
+    // Both switches off. `blockCompletion` governs the completion gate; `sessionGate` governs
+    // the v2 session gate. Naming both is the point — the old assertion said "the gate", and
+    // there is now more than one.
+    enforce.installEnforcement(withoutGate, { paths, options: { blockCompletion: false, sessionGate: false } })
+    eq('with both gates off, nothing is installed', (withoutGate.listeners.get('tools/pre-execute') || []).length, 0)
     const decision = await fire(withoutGate, 'tools/pre-execute',
       { name: 'update_goal', arguments: { action: 'complete' }, agent: fakeAgent('s1') }, { kind: 'allow' })
     eq('so a complete passes straight through', decision, undefined)
@@ -1086,6 +1091,176 @@ try {
     eq('an unfinished plan reports completion as blocked', block.can_complete, false)
     check('and says why', Array.isArray(block.completion_blocked_by) && block.completion_blocked_by.length > 0)
     eq('with no artifact, the field is null rather than absent', block.artifact, null)
+  }
+
+  // ---------------------------------------------------------------- the session gate (v2)
+  //
+  // The gate is the difference between "the harness asks the model to notice the goal" and
+  // "the harness does not let a session act until it has decided what the goal is". These
+  // assertions exist to prove it REFUSES, because a gate that never refuses is just the
+  // guidance layer with more code.
+  console.log('goal-enforce: the session gate holds a session with no goal')
+  {
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const agent = fakeAgent('sess-gate')
+
+    const write = await fire(ctx, 'tools/pre-execute',
+      { name: 'write', arguments: { path: 'a.txt' }, agent }, { kind: 'allow' })
+    eq('a write with no goal is refused', write.kind, 'deny')
+    check('and the refusal names the gate', /GOAL_GATE_REQUIRED/.test(write.reason), write.reason)
+    check('and tells the model how to leave it', /create_goal/.test(write.reason), write.reason)
+    check('and names the other exit', /闲聊/.test(write.reason), write.reason)
+    eq('and is counted', enforcement.stats().gateBlocked, 1)
+
+    // A READ is refused too. Asserting on `read` on purpose: the softer design would have let
+    // it through, so this is the assertion that breaks if someone quietly reverts to
+    // allow-read — which is exactly why the user's choice is pinned in a test.
+    const read = await fire(ctx, 'tools/pre-execute',
+      { name: 'read', arguments: { path: 'a.txt' }, agent }, { kind: 'allow' })
+    eq('and so is a read — the gate is not read/write-aware', read.kind, 'deny')
+
+    // The exits must pass, or the model can never satisfy the gate holding it.
+    for (const name of ['goal_delivery', 'create_goal', 'get_goal', 'ask_user_question', 'todo_write']) {
+      const passed = await fire(ctx, 'tools/pre-execute', { name, arguments: {}, agent }, { kind: 'allow' })
+      eq(`${name} passes through the gate`, passed.kind, 'allow')
+    }
+  }
+  {
+    // The second exit: the model declares this is not a task.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const agent = fakeAgent('sess-nontask')
+    const attempt = () => fire(ctx, 'tools/pre-execute', { name: 'write', arguments: {}, agent }, { kind: 'allow' })
+
+    eq('a work tool starts refused', (await attempt()).kind, 'deny')
+
+    // A reasonless declaration does NOT open the gate. This keeps the exit a deliberate act
+    // rather than something a malformed call can stumble through.
+    const empty = await fire(ctx, 'tools/pre-execute',
+      { name: 'goal_delivery', arguments: { action: 'declareNonTask' }, agent }, { kind: 'allow' })
+    eq('a reasonless declaration still passes (it is an exit tool)', empty.kind, 'allow')
+    eq('but it did not open the gate', (await attempt()).kind, 'deny')
+
+    const declared = await fire(ctx, 'tools/pre-execute',
+      { name: 'goal_delivery', arguments: { action: 'declareNonTask', reason: '用户在打招呼' }, agent }, { kind: 'allow' })
+    eq('a proper declaration passes', declared.kind, 'allow')
+    eq('and opens the gate', (await attempt()).kind, 'allow')
+    eq('and is counted', enforcement.stats().nonTaskDeclared, 1)
+  }
+  {
+    // The third state: a goal EXISTS but cannot answer "when is this done". Opening the gate
+    // here would only move the failure to the completion gate, after the work is built.
+    const paths = freshPaths()
+    const sessionId = 'sess-incomplete'
+    const seeded = store.writeDeliveryOverlay(paths, sessionId, domain.emptyDelivery(sessionId), null)
+    eq('the empty-plan fixture landed', seeded.ok, true)
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const attempt = () => fire(ctx, 'tools/pre-execute',
+      { name: 'write', arguments: {}, agent: fakeAgent(sessionId) }, { kind: 'allow' })
+
+    const blocked = await attempt()
+    eq('an empty goal is refused', blocked.kind, 'deny')
+    check('and the refusal is the INCOMPLETE one, not the missing one',
+      /GOAL_INCOMPLETE/.test(blocked.reason), blocked.reason)
+    for (const field of ['验收标准', '范围边界', '已知约束']) {
+      check(`and names the missing field "${field}"`, blocked.reason.includes(field), blocked.reason)
+    }
+
+    // Fill them the way the AGENT actually can, and the same call goes through. Scope and
+    // constraints are `propose*` ops — §24/§65 give the agent no authority to set them — so
+    // this is also the assertion that the gate is not a DEADLOCK: "asked, and waiting on the
+    // human" has to count as an answer. The first draft demanded a settled value and hung
+    // right here, which is exactly the failure this assertion exists to keep caught.
+    //
+    // NOTE the writes are CAS-guarded (`expectedRevision`): passing 0 twice silently REFUSED
+    // the second write and the fixture never reached the state under test. Each write's
+    // result is checked now, because a helper that fails quietly is how a test starts
+    // describing something other than what it claims.
+    let d = domain.emptyDelivery(sessionId)
+    d = domain.applyDeliveryOp(d, 'addAcceptance', { description: '首页可访问', mandatory: true }, { at: Date.now() }).delivery
+    d = domain.applyDeliveryOp(d, 'proposeScope', { excluded: ['不做设置页'] }, { at: Date.now() }).delivery
+    const firstWrite = store.writeDeliveryOverlay(paths, sessionId, d, seeded.revision)
+    eq('the fixture write landed', firstWrite.ok, true)
+    eq('a scope proposal alone is not yet enough', (await attempt()).kind, 'deny')
+
+    d = domain.applyDeliveryOp(d, 'proposeConstraints', { constraints: ['不改 DSH Core'] }, { at: Date.now() }).delivery
+    const secondWrite = store.writeDeliveryOverlay(paths, sessionId, d, firstWrite.revision)
+    eq('the second fixture write landed too', secondWrite.ok, true)
+    eq('but proposals for both open the gate WITHOUT waiting for approval', (await attempt()).kind, 'allow')
+  }
+  {
+    // With the session gate OFF, a goal-less session acts freely — the switch is honest.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: { sessionGate: false } })
+    eq('with the session gate off, a goal-less write proceeds',
+      (await fire(ctx, 'tools/pre-execute', { name: 'write', arguments: {}, agent: fakeAgent('s-off') }, { kind: 'allow' })).kind, 'allow')
+    eq('and nothing was counted', enforcement.stats().gateBlocked, 0)
+  }
+
+  console.log('goal-enforce: the reminder is per-phase, not once-per-session')
+  {
+    // v1 silenced the no-goal reminder after the first one, so a model that declined while
+    // still reading context never heard about it again — and the session ended with no goal
+    // by accident rather than by decision. This proves it comes back.
+    const paths = freshPaths()
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: { sessionGate: false } })
+    const work = [
+      { type: 'tool/call', data: { callId: 'c1', name: 'write' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+    ]
+    const step = (turn, s) => fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent('sess-remind', work), turn, step: s, signal: undefined },
+      () => Promise.resolve({ kind: 'enter', messages: [] }), { kind: 'enter', messages: [] })
+
+    const first = await step(1, 1)
+    eq('the first substantive step is nudged', (first.messages || []).length, 1)
+    check('and it names the exit tool', /declareNonTask/.test(first.messages[0].content[0].text), first.messages[0].content[0].text)
+
+    eq('it does not repeat inside the interval', ((await step(2, 5)).messages || []).length, 0)
+
+    const later = await step(3, 25)
+    eq('but it DOES come back after the interval', (later.messages || []).length, 1)
+    check('and the second one escalates', /第 2 次提醒/.test(later.messages[0].content[0].text), later.messages[0].content[0].text)
+    eq('and both are counted', enforcement.stats().goalNudged, 2)
+  }
+
+  console.log('goal-enforce: injection fires on reason, not only on the interval')
+  {
+    const paths = freshPaths()
+    const sessionId = 'sess-adaptive'
+    store.writeDeliveryOverlay(paths, sessionId, domain.emptyDelivery(sessionId), 0)
+    let goal = { ...GOAL, revision: 1 }
+    const ctx = fakeCtx({ goals: { get: () => goal } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const step = (turn, s) => fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), turn, step: s, signal: undefined },
+      () => Promise.resolve({ kind: 'enter', messages: [] }), { kind: 'enter', messages: [] })
+
+    eq('the first orientation always fires', ((await step(1, 1)).messages || []).length, 1)
+    eq('and the interval throttles the next one', ((await step(1, 3)).messages || []).length, 0)
+
+    // The goal moves. The next step must say so even though the interval has not elapsed —
+    // this is the assertion a fixed-interval design cannot satisfy.
+    goal = { ...goal, revision: 2 }
+    const onChange = await step(1, 4)
+    eq('a revision change injects immediately', (onChange.messages || []).length, 1)
+    check('and the block says the goal moved', /已变更/.test(onChange.messages[0].content[0].text), onChange.messages[0].content[0].text)
+    eq('and it is labelled as a change', onChange.messages[0].source.summary, '目标已更新')
+    eq('and counted as a change-driven injection', enforcement.stats().preflightOnChange, 1)
+
+    eq('but an unchanged revision does not repeat', ((await step(1, 5)).messages || []).length, 0)
   }
 } finally {
   for (const root of tempRoots) {

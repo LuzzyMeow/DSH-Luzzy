@@ -1180,9 +1180,82 @@ export function applyDeliveryOp(delivery, op, payload, context) {
       return { delivery: next }
     }
 
+    case 'declareNonTask': {
+      // The second exit from the session gate.
+      //
+      // It records a DECISION rather than a state: "this exchange is not long-running work".
+      // It is deliberately an op the model must call with a reason, because the alternative —
+      // reading the model's prose and deciding it sounded casual — is exactly the semantic
+      // judgement §39 hands to the model and the harness cannot make. Writing it to the
+      // change log also means an escaped gate leaves a trace, so a session that dodged a real
+      // task can be seen doing it.
+      const reason = text(input.reason, 400)
+      if (reason === undefined) {
+        return { error: 'declareNonTask 需要 payload.reason：说明为什么这不是长期任务。', code: ERROR_CODES.INVALID_STATE }
+      }
+      recordChange(next, at, actor, 'declare-non-task', reason, changeId)
+      next.nonTask = { reason, at }
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next }
+    }
+
     default:
       return { error: `未知操作 "${op}"`, code: ERROR_CODES.INVALID_STATE }
   }
+}
+
+/**
+ * Which required parts of a goal plan are still unanswered.
+ *
+ * WHY THIS IS A GATE AND NOT A WARNING
+ *
+ * The completion gate can already refuse `complete` when acceptance is empty — but by then the
+ * work is DONE, so the refusal is a post-mortem: it says "you built the wrong thing and cannot
+ * prove it". The same check at the START is worth far more, because the plan can still change.
+ * That is the whole argument for a session gate, applied one level down.
+ *
+ * WHY A PENDING PROPOSAL COUNTS AS ANSWERED
+ *
+ * Scope and constraints are `propose*` ops: §24/§65 give the AGENT no authority to set them and
+ * require a human to decide. So a version of this function that only looked at the settled
+ * value would DEADLOCK — it would demand a non-empty scope while the only way to produce one
+ * runs through a user who has not answered yet. The first draft did exactly that, and only the
+ * gate's own test caught it.
+ *
+ * The correct reading of "answered" is therefore: the value is set, OR the agent has asked and
+ * the question is with the human. Waiting on a pending proposal is not a gap in the plan — it
+ * is the plan working as designed, and the gate must let work continue while it does.
+ *
+ * Required fields, each because leaving it open makes a later decision impossible rather than
+ * merely less tidy:
+ *
+ *   acceptance  without it "done" is unjudgeable — §16/§20's core claim
+ *   scope       without it "done enough" is unjudgeable, and §23 says a scope the user set must
+ *               beat the agent's own plan; you cannot honour a boundary you never drew
+ *   constraints what the work may not do. "无" is a legitimate ANSWER; the requirement is that
+ *               the question was asked, which is why the refusal says so explicitly.
+ *
+ * Deliberately NOT required: focus and next (transient working state — §13 says a trivial turn
+ * must not be forced to write), tasks (a plan can be one step), decisions and evidence (both
+ * accrete during work by nature).
+ *
+ * @param {object} delivery - normalized overlay.
+ * @returns {string[]} human-readable names of the still-unanswered required fields.
+ */
+export function missingGoalFields(delivery) {
+  const pendingField = (name) =>
+    (delivery.proposals ?? []).some((row) => row.field === name && row.status === 'pending')
+
+  const missing = []
+  if ((delivery.acceptance ?? []).length === 0) missing.push('验收标准')
+
+  const scope = delivery.scope ?? {}
+  const hasScope = (scope.included?.length ?? 0) + (scope.excluded?.length ?? 0) > 0
+  if (!hasScope && !pendingField('scope')) missing.push('范围边界')
+
+  if ((delivery.constraints ?? []).length === 0 && !pendingField('constraints')) missing.push('已知约束')
+  return missing
 }
 
 /** The set of ops `applyDeliveryOp` understands — the route validates against it. */
@@ -1203,6 +1276,7 @@ export const DELIVERY_OPS = Object.freeze([
   'proposeAcceptanceChange',
   'withdrawProposal',
   'reconcile',
+  'declareNonTask',
 ])
 
 /**

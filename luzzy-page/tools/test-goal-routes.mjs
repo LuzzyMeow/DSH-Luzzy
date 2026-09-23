@@ -455,11 +455,25 @@ try {
     // that omits the preflight counters cannot answer that. So the shape is pinned here.
     const seen = await call(port, '/__luzzy/goal?sessionId=sess-counters')
     eq('an unseen session is still served', seen.status, 200)
-    const required = ['reconciliations', 'preflights', 'preflightMisses', 'goalNudged', 'lastPreflightTurn']
+    // v2 renamed the nudge BOOLEAN to a COUNT (`goalNudgeCount`) and added the session gate's
+    // own counters. The rename is deliberate: "was it asked" cannot show the failure that
+    // matters — a session asked repeatedly, with no goal — while a count can. So the pinned
+    // shape WIDENS rather than relaxes: §86/§87 want observability of whether the agent
+    // actually uses the goal, and a gate whose block count is unobservable is a gate nobody
+    // can tell is working.
+    const required = [
+      'reconciliations', 'preflights', 'preflightMisses', 'goalNudgeCount', 'lastPreflightTurn',
+      'gateBlocks', 'nonTaskDeclared', 'lastInjectedRevision',
+    ]
     check('the payload carries a counters block', seen.body.counters !== null && seen.body.counters !== undefined, JSON.stringify(Object.keys(seen.body)))
     for (const key of required) {
       check(`counters reports "${key}"`, Object.prototype.hasOwnProperty.call(seen.body.counters, key), JSON.stringify(seen.body.counters))
     }
+    // And the v1 name must be GONE rather than left beside the new one: a stale boolean next
+    // to the new count is exactly the "two fields named counters" trap the comment above
+    // describes, one level down.
+    check('the retired "goalNudged" boolean is gone',
+      !Object.prototype.hasOwnProperty.call(seen.body.counters, 'goalNudged'), JSON.stringify(seen.body.counters))
 
     // And the same shape on the branch that has a plan, not just the empty one. Built by
     // driving the real domain op rather than hand-writing a document — a hand-written fixture
