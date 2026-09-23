@@ -209,14 +209,33 @@ check('the service is what builds the view model', goalService.includes('functio
   check('extracted readiness', typeof readiness === 'function', 'extraction failed — the assertions below would be vacuous')
 
   if (typeof readiness === 'function') {
-    const empty = { acceptance: [], scope: { included: [], excluded: [] }, constraints: [], proposals: [] }
+    // 四格：预期产出 / 验收标准 / 范围边界 / 已知约束。
+    //
+    // 预期产出是第四个，而且它与另外三格**不同类**：它不需要人批（`setExpectedOutput` 直接
+    // 写），所以它连「等你确认」这一态都没有。页面与门必须给出同一个数字 —— 门那一侧数的是
+    // `missingGoalFields`，这里数的是同一件事的投影。
+    const empty = {
+      expectedOutput: '',
+      acceptance: [],
+      scope: { included: [], excluded: [] },
+      constraints: [],
+      proposals: [],
+    }
     const r0 = readiness(empty)
-    check('nothing filled → all three missing', r0.missing.length === 3, JSON.stringify(r0.missing))
+    check('nothing filled → all four missing', r0.missing.length === 4, JSON.stringify(r0.missing))
     check('and it is not ready', r0.ready === false)
+    check('and 预期产出 is one of them', r0.missing.includes('预期产出'), JSON.stringify(r0.missing))
 
     const withAcceptance = readiness({ ...empty, acceptance: [{ id: 'AC-1' }] })
     check('one acceptance is enough for that field', !withAcceptance.missing.includes('验收标准'), JSON.stringify(withAcceptance.missing))
-    check('but the other two still block', withAcceptance.missing.length === 2)
+    check('but the other three still block', withAcceptance.missing.length === 3)
+
+    // 预期产出自己可以被 Agent 一次补齐 —— 这是它与其他三格最实际的区别。
+    const withExpected = readiness({ ...empty, expectedOutput: '一个能双击打开的看板。' })
+    check('one 预期产出 clears that field', !withExpected.missing.includes('预期产出'), JSON.stringify(withExpected.missing))
+    check('and it is reported as settled, never as "waiting for you"',
+      withExpected.fields.find((f) => f.name === '预期产出').state === 'settled',
+      JSON.stringify(withExpected.fields.find((f) => f.name === '预期产出')))
 
     // THE DECISIVE CASE: a pending proposal on scope must count as answered.
     const proposed = readiness({
@@ -226,7 +245,7 @@ check('the service is what builds the view model', goalService.includes('functio
     check('a pending scope proposal is NOT counted as missing', !proposed.missing.includes('范围边界'), JSON.stringify(proposed.missing))
     check('and it is reported as "waiting for you"', proposed.fields.find((f) => f.name === '范围边界').state === 'proposed',
       JSON.stringify(proposed.fields.find((f) => f.name === '范围边界')))
-    check('and it still counts toward readiness (the gate opens on it)', proposed.missing.length === 2, JSON.stringify(proposed.missing))
+    check('and it still counts toward readiness (the gate opens on it)', proposed.missing.length === 3, JSON.stringify(proposed.missing))
 
     // An ADOPTED proposal is settled, not pending — it must not read as "still waiting".
     const adopted = readiness({
@@ -238,6 +257,7 @@ check('the service is what builds the view model', goalService.includes('functio
 
     // Everything settled → ready, and no field left unsaid.
     const full = readiness({
+      expectedOutput: '一个能双击打开的看板。',
       acceptance: [{ id: 'AC-1' }],
       scope: { included: ['a'], excluded: [] },
       constraints: ['无'],
@@ -249,14 +269,15 @@ check('the service is what builds the view model', goalService.includes('functio
     // 负向控制：把「待批算答过」这条去掉，上面那条断言必须失效。
     const strict = (view) => {
       const missing = []
+      if ((view.expectedOutput || '') === '') missing.push('预期产出')
       if (view.acceptance.length === 0) missing.push('验收标准')
       if (view.scope.included.length + view.scope.excluded.length === 0) missing.push('范围边界')
       if (view.constraints.length === 0) missing.push('已知约束')
       return { missing, ready: missing.length === 0 }
     }
     const strictResult = strict({ ...empty, proposals: [{ id: 'P-1', field: 'scope', status: 'pending', pending: true }] })
-    check('the naive version (ignoring proposals) reports 3 missing, so the assertion above can fail',
-      strictResult.missing.length === 3 && proposed.missing.length === 2,
+    check('the naive version (ignoring proposals) reports 4 missing, so the assertion above can fail',
+      strictResult.missing.length === 4 && proposed.missing.length === 3,
       `naive=${strictResult.missing.length} real=${proposed.missing.length}`)
   }
 }

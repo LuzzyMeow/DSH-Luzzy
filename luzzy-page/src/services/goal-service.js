@@ -253,6 +253,16 @@
 
     const fields = []
 
+    // 预期产出：Agent 直接写，**没有「等你确认」这一态** —— 它不需要人批，不写就是没写。
+    // 这也是它必须与另外三格并列显示的原因：它是 Agent 自己的责任，不能藏在别处。
+    const expected = view.expectedOutput || ''
+    fields.push({
+      name: '预期产出',
+      state: expected === '' ? 'missing' : 'settled',
+      detail: expected === '' ? '' : expected.slice(0, 40) + (expected.length > 40 ? '…' : ''),
+      how: 'setExpectedOutput',
+    })
+
     // 验收标准：Agent 可直接写，所以 missing 时给的指引是「加一条」。
     const acceptanceProposal = pendingFor('acceptance')
     fields.push({

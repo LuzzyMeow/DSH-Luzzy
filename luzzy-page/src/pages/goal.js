@@ -395,8 +395,9 @@
     return LZ.Card.card({
       title: '还缺什么',
       count: readiness.missing.length === 0 ? '齐了，可以动手' : readiness.missing.length + ' 项还没有',
-      sub: '这三项没齐之前，Agent 的工具调用会被拒——不是故障，是启动协议。' +
-        '「等你确认」的算已经答过，它不会卡在那里等你。',
+      sub: '这几项没齐之前，Agent 的工具调用会被拒——不是故障，是启动协议。' +
+        '「等你确认」的算已经答过，它不会卡在那里等你。' +
+        '「预期产出」是唯一不需要你批的：Agent 自己写一段话就完了 —— 但它不写就一直缺着。',
       body: body,
     })
   }

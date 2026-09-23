@@ -1522,6 +1522,17 @@ export function applyDeliveryOp(delivery, op, payload, context) {
  *   constraints what the work may not do. "无" is a legitimate ANSWER; the requirement is that
  *               the question was asked, which is why the refusal says so explicitly.
  *
+ *   expectedOutput 用户明确要求「Agent 填写」。**这条要求必须在这里**，不能只写在工具描述
+ *               里 —— 已经实测过一次：描述写了、页面也做了，结果是这一格**空着上线**，
+ *               而页面上看不出哪里不对（空态是一句真诚的「还没有写」，它不报错）。
+ *               它和上面三条的区别是**能自己补**（不需要人批），所以这条要求是自愈的：
+ *               拒绝文本点名它，Agent 调一次 setExpectedOutput 门就开了。
+ *   acceptance  without it "done" is unjudgeable — §16/§20's core claim
+ *   scope       without it "done enough" is unjudgeable, and §23 says a scope the user set must
+ *               beat the agent's own plan; you cannot honour a boundary you never drew
+ *   constraints what the work may not do. "无" is a legitimate ANSWER; the requirement is that
+ *               the question was asked, which is why the refusal says so explicitly.
+ *
  * Deliberately NOT required: focus and next (transient working state — §13 says a trivial turn
  * must not be forced to write), tasks (a plan can be one step), decisions and evidence (both
  * accrete during work by nature).
@@ -1534,6 +1545,7 @@ export function missingGoalFields(delivery) {
     (delivery.proposals ?? []).some((row) => row.field === name && row.status === 'pending')
 
   const missing = []
+  if ((delivery.expectedOutput ?? '') === '') missing.push('预期产出')
   if ((delivery.acceptance ?? []).length === 0) missing.push('验收标准')
 
   const scope = delivery.scope ?? {}

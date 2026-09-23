@@ -1253,6 +1253,10 @@ try {
     // result is checked now, because a helper that fails quietly is how a test starts
     // describing something other than what it claims.
     let d = domain.emptyDelivery(sessionId)
+    // 预期产出是第四个必填项（用户要求「Agent 填写」，所以宿主真的要求它）。它和下面两条
+    // 不同：不需要人批，Agent 一次 setExpectedOutput 就补齐 —— 所以它写在这里，而不是
+    // 「再等一个提案」。
+    d = domain.applyDeliveryOp(d, 'setExpectedOutput', { expectedOutput: '一个能打开的首页，三种状态都走通。' }, { at: Date.now() }).delivery
     d = domain.applyDeliveryOp(d, 'addAcceptance', { description: '首页可访问', mandatory: true }, { at: Date.now() }).delivery
     d = domain.applyDeliveryOp(d, 'proposeScope', { excluded: ['不做设置页'] }, { at: Date.now() }).delivery
     const firstWrite = store.writeDeliveryOverlay(paths, sessionId, d, seeded.revision)
