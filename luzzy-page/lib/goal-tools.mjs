@@ -61,7 +61,13 @@ const ACTION_DESCRIPTIONS = {
   setAcceptanceStatus: 'payload: {id, status, evidence?[]} — set a criterion to pending|in_progress|verified|rejected. verified REQUIRES evidence.',
   addTask: 'payload: {title, acceptance?[], dependsOn?[], status?} — add one task (T-nnn). What you are doing, not what must be true.',
   setTaskStatus: 'payload: {id, status, artifacts?[]} — set a task to pending|ready|in_progress|blocked|completed|verified|cancelled.',
+  // 改内容与删：没有这两条，Agent 把标题写歪或把任务拆错之后只能再堆一条新的上去，
+  // 让后面读的人自己分辨哪条是对的。「执行途中可调整」要的正是这两个动作。
+  setTask: 'payload: {id, title?, acceptance?[], dependsOn?[]} — EDIT an existing task. `acceptance` / `dependsOn` REPLACE the whole list when given (use this to move a task onto a different criterion); omit a field to leave it alone. Prefer this over adding a corrected duplicate.',
+  removeTask: 'payload: {id} — DELETE a task that should not exist. Tasks depending on it are detached rather than deleted, and the old title is kept in the change log. Use instead of leaving a stale task around.',
   addEvidence: 'payload: {summary, kind, detail?, ref?, acceptance?[]} — record one piece of proof (E-nnn). kind is test|command|file|runtime|screenshot|user_confirmation|external.',
+  setEvidence: 'payload: {id, summary?, kind?, detail?, ref?} — EDIT a recorded piece of evidence in place. Use when the summary or reference was wrong; do NOT add a second row describing the same proof.',
+  removeEvidence: 'payload: {id} — DELETE an evidence row. Any criterion pointing at it is detached, so no dangling E-nnn reference is left behind.',
   setFocus: 'payload: {focus} — the ONE thing most worth attention right now. Must be specific, not "continue the project".',
   setNext: 'payload: {next[]} — the executable next steps, in order.',
   addBlocker: 'payload: {code, message} — record a real external blocker. code must be lower-kebab-case.',

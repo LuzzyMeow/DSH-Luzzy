@@ -1007,6 +1007,92 @@ export function applyDeliveryOp(delivery, op, payload, context) {
       return { delivery: next, created: row.id }
     }
 
+    // ---- 改内容 / 删（Agent 中途调整计划）
+    //
+    // 「加」与「改状态」早就有，缺的是**改内容**和**删**。这不是权限问题 —— §65 的 Authority
+    // Matrix 里任务状态与证据本来就归 Agent 写；是这两条路从来没实现，于是 Agent 一旦把
+    // 任务标题写歪、或把一条证据记错，只能再堆一条新的上去，让后面读的人自己分辨哪条是对的。
+    // **能改能删，才叫「执行途中可调整」。**
+    //
+    // 删是**追加式历史的例外**，所以它记两条：一条 `remove`，一条把删掉的标题留在变更里 ——
+    // 否则事后看历史只知道「少了一条 T-003」，不知道它原本是什么。
+    case 'setTask': {
+      const id = text(input.id, 32) ?? ''
+      const row = next.tasks.find((entry) => entry.id === id)
+      if (row === undefined) return { error: `任务 ${id} 不存在`, code: ERROR_CODES.NOT_FOUND }
+      const title = text(input.title)
+      if (title !== undefined) row.title = title
+      // 关联可以整体替换（区别于 setTaskStatus 的「追加产出」）：改计划时会想把某个任务
+      // 从一条验收标准挪到另一条。显式给了才动，没给就保持原样。
+      if (input.acceptance !== undefined) {
+        const known = new Set(next.acceptance.map((entry) => entry.id))
+        row.acceptance = refList(input.acceptance, known)
+      }
+      if (input.dependsOn !== undefined) {
+        const knownTasks = new Set(next.tasks.map((entry) => entry.id))
+        // 不能依赖自己：那会生成一个只有它自己的环，任务树会把它当根节点排出来。
+        row.dependsOn = refList(input.dependsOn, knownTasks).filter((dep) => dep !== row.id)
+      }
+      recordChange(next, at, actor, `edit ${row.id}`, row.title, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next }
+    }
+
+    case 'removeTask': {
+      const id = text(input.id, 32) ?? ''
+      const row = next.tasks.find((entry) => entry.id === id)
+      if (row === undefined) return { error: `任务 ${id} 不存在`, code: ERROR_CODES.NOT_FOUND }
+      next.tasks = next.tasks.filter((entry) => entry.id !== id)
+      // 被别人依赖的任务不能悄悄消失：那会让依赖它的任务指向一个不存在的节点。
+      // taskTree 有「依赖项不在本计划里就当根」的兜底，所以不会崩 —— 但那会安静地改变树的形状。
+      const orphans = next.tasks.filter((entry) => entry.dependsOn.includes(id))
+      for (const entry of orphans) entry.dependsOn = entry.dependsOn.filter((dep) => dep !== id)
+      recordChange(next, at, actor, `remove ${id}`, row.title, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next, removed: row.id, detached: orphans.map((entry) => entry.id) }
+    }
+
+    case 'setEvidence': {
+      const id = text(input.id, 32) ?? ''
+      const row = next.evidence.find((entry) => entry.id === id)
+      if (row === undefined) return { error: `证据 ${id} 不存在`, code: ERROR_CODES.NOT_FOUND }
+      const summary = text(input.summary)
+      if (summary !== undefined) row.summary = summary
+      if (input.kind !== undefined) {
+        const kind = oneOf(input.kind, EVIDENCE_KINDS, undefined)
+        if (kind === undefined) return { error: `kind 必须是 ${EVIDENCE_KINDS.join(' / ')}`, code: ERROR_CODES.INVALID_STATE }
+        row.kind = kind
+      }
+      if (input.detail !== undefined) row.detail = text(input.detail) ?? ''
+      if (input.ref !== undefined) row.ref = text(input.ref, 500) ?? ''
+      recordChange(next, at, actor, `edit ${row.id}`, row.summary, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next }
+    }
+
+    case 'removeEvidence': {
+      const id = text(input.id, 32) ?? ''
+      const row = next.evidence.find((entry) => entry.id === id)
+      if (row === undefined) return { error: `证据 ${id} 不存在`, code: ERROR_CODES.NOT_FOUND }
+      next.evidence = next.evidence.filter((entry) => entry.id !== id)
+      // 先把指向它的引用摘干净，再删。留一个悬空的 E-nnn 会让「这条验收标准有什么证据」
+      // 指向不存在的记录 —— 那比少一条证据更糟，因为它看起来像有证据。
+      const stillReferenced = []
+      for (const criterion of next.acceptance) {
+        if (criterion.evidence.includes(id)) {
+          criterion.evidence = criterion.evidence.filter((entry) => entry !== id)
+          stillReferenced.push(criterion.id)
+        }
+      }
+      recordChange(next, at, actor, `remove ${id}`, row.summary, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next, removed: row.id, detached: stillReferenced }
+    }
+
     case 'setTaskStatus': {
       const id = text(input.id, 32) ?? ''
       const row = next.tasks.find((entry) => entry.id === id)
@@ -1264,7 +1350,14 @@ export const DELIVERY_OPS = Object.freeze([
   'setAcceptanceStatus',
   'addTask',
   'setTaskStatus',
+  // 改内容 / 删：Agent 与人都能写（§65 里 Task State 与 Evidence 本来就归 Agent）。
+  // 加进来是为了让「执行途中调整计划」成立 —— 只能加不能改，写歪一条就只能再堆一条，
+  // 后面读的人得自己去分辨哪条是对的。
+  'setTask',
+  'removeTask',
   'addEvidence',
+  'setEvidence',
+  'removeEvidence',
   'setFocus',
   'setNext',
   'proposeScope',
