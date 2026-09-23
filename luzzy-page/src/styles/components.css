@@ -521,6 +521,26 @@ code, .mono {
   font-size: var(--lz-font-base);
 }
 
+/* ---- 目标全文（折叠区） ----
+ * 目标正文可能是整份方案（几万字）。摘要走 .focusBox，其余进这里。
+ * **pre-wrap 是这条修复的核心**：换行与缩进是原文的一部分，普通空白折叠会把
+ * 几百行压成一个连续段落，`---`、`§`、列表全部糊在一起——用户截图里就是那个形状。
+ * 字号回到正文档：这是要读的东西，不是要强调的结论。 */
+.objectiveRest {
+  margin-top: var(--lz-space-xs);
+}
+
+.objectiveFull {
+  max-height: 22rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-secondary);
+  padding: var(--lz-space-sm) 0 0;
+}
+
 /* 页面级状态块：整页只有一个，居中 */
 .status {
   display: flex;

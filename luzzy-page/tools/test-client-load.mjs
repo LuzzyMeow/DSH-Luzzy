@@ -528,6 +528,41 @@ if (entry) {
   check('goal centre: sync-state line', source.includes('function driftLine('))
   check('and it renders even when synced', source.includes("data-drift=\"synced\""))
   check('goal centre: artifact projection', source.includes('function artifactBlock('))
+
+  // ------------------------------------------------- 用户截图里报的两个问题
+  //
+  // ① 顶部并排两个一模一样的「已完成」胶囊 ② 目标正文被压成一大坨。
+  // 两条都是**用错原语**，所以断言钉在结构上，不钉在外观上。
+  {
+    const overview = readFileSync(join(TOOLS_ROOT, 'src', 'pages', 'overview.js'), 'utf8')
+
+    // ① 健康度与阶段同档时不画 —— 同一个词说两遍只增加噪音，还让人去找两者的区别。
+    check('the overview suppresses a redundant health badge',
+      overview.includes('toneOf(view.health) === LZ.StatusBadge.toneOf(goal.phase)'),
+      '两个徽标又并排了')
+    // 但不同档时必须仍然画出来，否则就是删掉了它而不是去重。
+    check('but still renders it when the tone differs',
+      /:\s*LZ\.StatusBadge\.fromStatus\(view\.health\)/.test(overview))
+
+    // ② 目标正文走分档显示，不再无条件塞进「一句话结论」的强调块。
+    check('the overview uses the shared objective renderer', overview.includes('objectiveText(goal.objective)'))
+    check('and the goal centre does too', source.includes('LZ.Format.objectiveText(goal.objective)'))
+
+    const format = readFileSync(join(PLUGIN_ROOT, 'src', 'components', 'Format.js'), 'utf8')
+    check('the renderer lives in the shared Format module', format.includes('function objectiveText('))
+    check('short objectives stay emphasised, long ones fold',
+      format.includes('const multiline = text.indexOf') && format.includes('objectiveRest'))
+    // 判据是**有没有结构**，不是有多长。第一版只按字数，探针抓出反例：一段 100 字、带换行的
+    // 目标照样留在没有 pre-wrap 的强调块里，CSS 又把换行折叠掉 —— 长度是表象，换行才是会坏的那个。
+    check('and the fold triggers on structure, not only on length',
+      /multiline\s*\|\|/.test(format) || /if \(!multiline && text\.length <= 240\)/.test(format),
+      '又只按字数判断了')
+
+    const css = readFileSync(join(PLUGIN_ROOT, 'src', 'styles', 'components.css'), 'utf8')
+    // pre-wrap 是这条修复的核心：折叠了空白，几百行就糊成一坨。
+    check('the folded body preserves newlines', /\.objectiveFull\s*\{[^}]*white-space:\s*pre-wrap/.test(css))
+    check('and it scrolls instead of stretching the page', /\.objectiveFull\s*\{[^}]*max-height/.test(css))
+  }
   // A proposal may only be adopted from the page, so the page must actually offer it.
   check('the page can adopt a proposal', source.includes('adoptProposal'))
   // The artifact write is opt-in, so the page must not enable it by itself.

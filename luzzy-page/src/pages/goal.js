@@ -54,7 +54,7 @@
       LZ.StatusBadge.fromStatus(view.health) +
       '</div>'
 
-    const objective = '<div class="focusBox">' + esc(goal.objective) + '</div>'
+    const objective = LZ.Format.objectiveText(goal.objective)
 
     const meta = LZ.Card.kv([
       { label: '当前阶段', value: goal.phaseLabel },
