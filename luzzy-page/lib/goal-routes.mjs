@@ -310,7 +310,19 @@ async function handleGet(ctx, req, res, deps) {
     const url = new URL(req.url ?? '/', 'http://localhost')
     const sessionId = url.searchParams.get('sessionId')
     const includeArtifact = url.searchParams.get('artifact') === '1'
+    // Markdown 预览：只在页面真的要开视窗时才生成（`markdown=1`）。
+    //
+    // 不进默认载荷，是因为这份文本是**全量投影**（十几节，随计划一起变长），而页面在
+    // 几十秒一轮的轮询里每次都取一遍 —— 那等于每轮都传一份没人正在看的文档（§82/§83）。
+    //
+    // 不传 `generatedAt`：这份文本的用处是「给人读当前计划」，不是「和盘上那份逐字节比」。
+    // 带上时间戳会让同一份状态每次渲染都不同 —— 一个没有信息量的差异，而它会让
+    // 「打开两次、内容不一样」看起来像状态变了。
+    const includeMarkdown = url.searchParams.get('markdown') === '1'
     const snapshot = buildGoalSnapshot({ ...deps, ctx, sessionId, includeArtifact })
+    if (includeMarkdown && snapshot.delivery !== null && snapshot.delivery !== undefined) {
+      snapshot.markdown = renderGoalMarkdown(snapshot.delivery, snapshot.goal, { artifactPath: ARTIFACT_RELATIVE_PATH })
+    }
 
     // Refresh the projection when it is enabled and the page asked for it. A GET that
     // writes by default would be a surprise; `artifact=1` is the page explicitly asking.

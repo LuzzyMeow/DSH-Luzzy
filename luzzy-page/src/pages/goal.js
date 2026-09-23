@@ -22,6 +22,38 @@
   const esc = LZ.Card.esc
   const badge = LZ.StatusBadge.badge
 
+  /* ---------------------------------------------------------------- 预期产出 */
+
+  /**
+   * 预期产出：这个目标做完之后**到底会得到什么**，一段话。
+   *
+   * 位置在目标正文下面、同一张卡片里，而不是另开一张卡：
+   *   1. 「我要完成什么」和「做完会得到什么」本来是同一个句子的两半，拆成两张卡会让人以为
+   *      它们是两件事；
+   *   2. 这一页已经太长（用户直接提过），再加一张整宽卡片是最差的加法。
+   *
+   * 没写就**照实说没写**，绝不拿目标正文来顶上 —— 那一格是 Agent 对结果的承诺，
+   * 而「它还没有回答这个问题」本身就是用户要看到的信息。补一句默认文案会让页面看起来
+   * 已经答过了，于是没有人会回来写它。
+   *
+   * 内容按 Markdown 渲染（`LZ.Markdown.render` 先转义再解析，只放行 http/mailto 链接，
+   * 所以这里可以放心当 HTML 用）。超过一段话该有的长度时，正文留在卡片里、另给一个
+   * 视窗入口 —— 它已经不像「一段话」了，页面不该跟着它一起变长。
+   */
+  function expectedOutputBlock(view) {
+    if (view.delivery === null || view.delivery === undefined) return ''
+    const text = view.delivery.expectedOutput || ''
+    const heading = '<div class="metricLabel">预期产出</div>'
+    if (text === '') {
+      return heading +
+        '<p class="rowSub">还没有写。这一格要一段话 —— 这个目标做完之后会得到什么。</p>'
+    }
+    const body = LZ.Markdown.render(text)
+    if (text.length <= 240) return heading + body
+    return heading + body +
+      LZ.Card.btnBar([{ label: '在视窗里读', attrs: 'data-viewer="expected" data-viewer-title="预期产出"' }])
+  }
+
   /* ---------------------------------------------------------------- 目标概览 */
 
   function overviewBlock(view) {
@@ -55,6 +87,7 @@
       '</div>'
 
     const objective = LZ.Format.objectiveText(goal.objective)
+    const expected = expectedOutputBlock(view)
 
     // 卡片头**不再重复阶段**。
     //
@@ -76,6 +109,10 @@
         LZ.Card.btnBar([
           { label: '刷新', id: 'goalRefresh' },
           { spacer: true },
+          // Markdown 视窗的入口。放在概览卡上而不是页面底部，是因为它回答的正是这张卡
+          // 的问题（「我要完成什么」），而「完整」两个字是它唯一的卖点：卡片里是摘要，
+          // 视窗里是全部十三节。
+          { label: '完整计划', attrs: 'data-viewer="plan" data-viewer-title="完整目标与计划"' },
           { label: '查看 goal.md', id: 'goalRawToggle', attrs: 'aria-expanded="' + String(LZ.App.isRawOpen()) + '"' },
         ]),
     })

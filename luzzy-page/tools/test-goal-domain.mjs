@@ -370,6 +370,47 @@ try {
     eq('health is a state name', typeof s.health, 'string')
   }
 
+  console.log('goal-domain: 预期产出 is agent-written execution state, and must be ONE paragraph')
+  {
+    const one = '一个能双击打开的看板，loading / empty / error 三种状态都走通，并留下四张截图当证据。'
+    const d = build([['setExpectedOutput', { expectedOutput: one }]])
+    eq('a one-paragraph 预期产出 lands', d.expectedOutput, one)
+
+    // 「一段话」是用户提的要求，所以**在这里**查它，而不是只在工具描述里写一句「请写成一段」：
+    // 模型会写成三段，而页面上那三段的排版看起来还挺好 —— 坏得不像坏的，就没人回来改。
+    const two = domain.applyDeliveryOp(domain.emptyDelivery('s'), 'setExpectedOutput',
+      { expectedOutput: '第一段。\n\n第二段。' }, { at: AT })
+    check('two paragraphs are REFUSED, not silently joined', typeof two.error === 'string')
+    check('and the refusal talks about 一段', /一段/.test(String(two.error)))
+
+    // 空字符串不等于「还没写」：它会让页面把「没填」读成「填了」。
+    const blank = domain.applyDeliveryOp(domain.emptyDelivery('s'), 'setExpectedOutput',
+      { expectedOutput: '   ' }, { at: AT })
+    check('blank is refused', typeof blank.error === 'string')
+
+    // 超长是**拒绝**，不是截断：被截断的摘要会以一个「长度正常」的样子留在页面上。
+    const long = domain.applyDeliveryOp(domain.emptyDelivery('s'), 'setExpectedOutput',
+      { expectedOutput: 'x'.repeat(domain.MAX_EXPECTED_OUTPUT_CHARS + 1) }, { at: AT })
+    check('over-length is refused rather than truncated', typeof long.error === 'string')
+    const atLimit = domain.applyDeliveryOp(domain.emptyDelivery('s'), 'setExpectedOutput',
+      { expectedOutput: 'y'.repeat(domain.MAX_EXPECTED_OUTPUT_CHARS) }, { at: AT })
+    eq('exactly at the limit is accepted', atLimit.delivery.expectedOutput.length, domain.MAX_EXPECTED_OUTPUT_CHARS)
+
+    check('it is an agent-writable op', domain.DELIVERY_OPS.includes('setExpectedOutput'))
+
+    // 投影：进 goal.md，挂在第 1 节下面 —— 它不能把后面 12 节的编号整体推一位。
+    const md = domain.renderGoalMarkdown(d, GOAL, { generatedAt: AT })
+    check('the markdown projection carries it', md.includes('### 预期产出') && md.includes(one))
+    check('and the numbered sections keep their numbers',
+      md.includes('## 2. 验收标准') && md.includes('## 13. 变更记录'))
+    const unwritten = domain.renderGoalMarkdown(domain.emptyDelivery('s'), GOAL, { generatedAt: AT })
+    check('an unwritten 预期产出 is stated, not faked', unwritten.includes('（还没有写预期产出）'))
+
+    // 往返：归一化之后它还在，而不是被当成未知字段丢掉。
+    const round = domain.normalizeDelivery(JSON.parse(JSON.stringify(d)), 's')
+    eq('it survives a store round-trip', round.delivery.expectedOutput, one)
+  }
+
   console.log('goal-domain: unknown ops are refused, never silently ignored')
   {
     const d = domain.emptyDelivery('s')

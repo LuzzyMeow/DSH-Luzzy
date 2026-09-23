@@ -49,6 +49,15 @@ export const MAX_FOCUS_CHARS = 400
 export const MAX_NEXT_ITEMS = 20
 
 /**
+ * 预期产出：**一段话**。
+ *
+ * 上限按「一段」给，不按「一份文档」给 —— 用户要的是概括。超了就让 Agent 自己去删，
+ * 而不是在这里悄悄截断：被截断的摘要会以一个「长度正常」的样子留在页面上，
+ * 而它已经不再是被交付的那句话了。
+ */
+export const MAX_EXPECTED_OUTPUT_CHARS = 1200
+
+/**
  * 状态链的两次判断的取值。
  *
  * 两条分支就是用户给的那两条：命中（这一轮在推进一个长任务）与未命中（不是）。未命中不是
@@ -239,6 +248,19 @@ export function emptyDelivery(sessionId) {
     focus: '',
     next: [],
     /**
+     * 预期产出：这个目标做完之后到底会得到什么，**一段话**概括。
+     *
+     * 为什么它是独立字段而不是塞进 focus / next：
+     *   focus  当前最值得关注的一件事   —— 现在的
+     *   next   接下来要做的几步         —— 下一步的
+     *   它     最终交付长什么样         —— 做完之后的
+     * 「做完了会得到什么」是长任务里最先被问、也最容易在十几轮之后失真的那句话。
+     * 它属于 Agent 可写的执行记录（§65 的 Agent 列），不是人类权威字段。
+     *
+     * 空字符串 = 还没写。页面照实说「还没写」，不拿目标原文来顶替。
+     */
+    expectedOutput: '',
+    /**
      * 状态链：每一轮都要走的那两步判断。
      *
      * `goalMatch` —— 这一轮是否在推进一个长期目标（命中／未命中）
@@ -298,6 +320,7 @@ export function normalizeDelivery(raw, sessionId) {
   delivery.objectiveMirror = text(raw.objectiveMirror) ?? null
   delivery.focus = text(raw.focus, MAX_FOCUS_CHARS) ?? ''
   delivery.next = stringList(raw.next, MAX_NEXT_ITEMS)
+  delivery.expectedOutput = text(raw.expectedOutput, MAX_EXPECTED_OUTPUT_CHARS) ?? ''
   delivery.constraints = stringList(raw.constraints, 50)
   delivery.revision = nonNegativeInteger(raw.revision)
   delivery.updatedAt = nonNegativeInteger(raw.updatedAt)
@@ -1211,6 +1234,41 @@ export function applyDeliveryOp(delivery, op, payload, context) {
       return { delivery: next }
     }
 
+    case 'setExpectedOutput': {
+      // 「一段话」是用户明确提的要求，所以这里**真的去查它是不是一段**。
+      // 只在工具描述里写一句「请写成一段」是不够的：模型会写三段，而页面上那三段的排版
+      // 看起来还挺好 —— 坏得不像坏的，就没人会回来改。
+      //
+      // 判据是**空行**而不是换行：一段话里的软换行仍然是一段，空行才是真的分了段。
+      const supplied = typeof input.expectedOutput === 'string' ? input.expectedOutput : undefined
+      if (supplied === undefined) {
+        return { error: '缺少预期产出（expectedOutput）', code: ERROR_CODES.INVALID_STATE }
+      }
+      const body = supplied.replace(/\r\n/g, '\n').trim()
+      if (body === '') {
+        return { error: '预期产出不能是空的 —— 空字符串不等于「还没想好」，它会让页面把没填读成填了', code: ERROR_CODES.INVALID_STATE }
+      }
+      if (/\n[ \t]*\n/.test(body)) {
+        return {
+          error: '预期产出必须是**一段**，这里用空行分成了多段。压成一段再提交 —— '
+            + '页面按「一段话」排版这一格，分段会让它变成一篇文章，而它要回答的是一句话的问题。',
+          code: ERROR_CODES.INVALID_STATE,
+        }
+      }
+      if (body.length > MAX_EXPECTED_OUTPUT_CHARS) {
+        // 明确拒绝而不是悄悄截断：被截断的摘要会以一个「长度正常」的样子留在页面上。
+        return {
+          error: `预期产出有 ${body.length} 字，超过上限 ${MAX_EXPECTED_OUTPUT_CHARS} —— 要的是概括，不是改写。`,
+          code: ERROR_CODES.INVALID_STATE,
+        }
+      }
+      next.expectedOutput = body
+      recordChange(next, at, actor, 'set expected output', body, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next }
+    }
+
     case 'proposeScope': {
       // Scope is a human-authority field; an agent changing it is the exact behaviour
       // AC-011 forbids. The op is NAMED `proposeScope` rather than `setScope` so the name
@@ -1502,6 +1560,9 @@ export const DELIVERY_OPS = Object.freeze([
   'removeEvidence',
   'setFocus',
   'setNext',
+  // 预期产出与 focus / next 同类：都是 Agent 写的**执行记录**，不碰目标 / 范围 / 约束 /
+  // 必须的验收标准那些人类权威字段（§65 的 Human 列）。所以它进这张表，不进 PROPOSAL_OPS。
+  'setExpectedOutput',
   'proposeScope',
   'proposeConstraints',
   'addBlocker',
@@ -1745,6 +1806,16 @@ export function renderGoalMarkdown(delivery, runtimeGoal, meta = {}) {
   lines.push(`- 健康度：${HEALTH_LABELS[summary.health] ?? summary.health}`)
   if (delivery.goalRevision !== null) lines.push(`- 交付计划基于修订：${delivery.goalRevision}`)
   if (meta.generatedAt !== undefined) lines.push(`- 投影时间：${formatStamp(meta.generatedAt)}（UTC）`)
+  lines.push('')
+
+  // 1b — 预期产出。
+  //
+  // 挂在第 1 节下面、而不是新开一节再把它后面的 12 节全部往后推一位：编号是给人指位置用的
+  // （「第 5 节看约束」），平移一次，此前所有口头与文字里的指代就全错了。一个新增字段不值得
+  // 让整份文档的坐标系统动一次。
+  lines.push('### 预期产出')
+  lines.push('')
+  lines.push(delivery.expectedOutput === '' ? '（还没有写预期产出）' : delivery.expectedOutput)
   lines.push('')
 
   // 2 — acceptance

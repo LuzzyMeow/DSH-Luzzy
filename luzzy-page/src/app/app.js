@@ -783,10 +783,37 @@
    * @param {string} [title]
    */
   function openViewer(kind, title) {
-    const labels = { objective: '目标全文', raw: 'goal.md 原文' }
+    const labels = { objective: '目标全文', raw: 'goal.md 原文', plan: '完整目标与计划', expected: '预期产出' }
     const heading = title || labels[kind] || '查看'
 
+    // Markdown 视窗：完整目标与计划。
+    //
+    // **先取再开**。视窗是脱离页面流的一层，它必须一次给全 —— 一个先弹出来、隔一会儿
+    // 才自己长出内容的框，比多等两百毫秒更糟。本机路由是毫秒级的，所以这一等看不见。
+    //
+    // 取的是 `/__luzzy/goal?markdown=1`：同一份运行时状态渲染出来的 Markdown，
+    // 不是盘上的 goal.md —— 那个文件可能没开投影，也可能已经过期。
+    if (kind === 'plan') {
+      return getJson(withSession('/__luzzy/goal?markdown=1'), 20000).then(function (result) {
+        const text = result.ok && result.body && typeof result.body.markdown === 'string' ? result.body.markdown : ''
+        return LZ.Dialog.show({
+          title: heading,
+          content: text === ''
+            ? '<p class="rowSub">这份计划生成不出来：这个会话可能还没有目标，也可能状态读不到。</p>'
+            : LZ.Markdown.render(text),
+          cancelLabel: null,
+          confirmLabel: '关闭',
+        })
+      })
+    }
+
     const bodyFor = function () {
+      if (kind === 'expected') {
+        const delivery = state.goal === null || state.goal === undefined ? null : state.goal.delivery
+        const text = delivery === null || delivery === undefined ? '' : String(delivery.expectedOutput || '')
+        if (text === '') return '<p class="rowSub">（还没有写预期产出）</p>'
+        return LZ.Markdown.render(text)
+      }
       if (kind === 'objective') {
         const goal = state.goal === null ? null : state.goal.goal
         const text = goal === null || goal === undefined ? '' : String(goal.objective || '')

@@ -190,6 +190,12 @@
       objectiveMirror: delivery.objectiveMirror || '',
       focus: delivery.focus || '',
       next: (delivery.next || []).slice(),
+      // 预期产出：Agent 写的「做完会得到什么」，一段话。
+      //
+      // 原样透传，不在这里补任何默认文案 —— 「还没写」是一个事实，页面要能把它说成事实。
+      // 拿 target 的 objective 来顶替是最容易顺手做、也最坏的一种「补」：它会让页面看起来
+      // 已经填过了，而 Agent 从来没有回答过这个问题。
+      expectedOutput: delivery.expectedOutput || '',
       // 状态链的两条分支：这里只投影**事实**（Agent 答过什么、什么时候答的），
       // 页面负责把它说成中文。判断本身归 Agent，这一层不替它补默认值。
       chain: {
