@@ -75,11 +75,51 @@
  * @module dsh-luzzy-page/goal-enforce
  */
 
+import { randomUUID } from 'node:crypto'
+
 import { applyDeliveryOp, completionGate, needsReconciliation, nextId, renderCompletionRefusal, summarize } from './goal-domain.mjs'
 import { readDeliveryOverlay, writeDeliveryOverlay } from './goal-store.mjs'
 
 /** Attribution for everything this plugin injects. NEVER `{kind:'user'}`. */
 export const PLUGIN_NAME = 'dsh-luzzy-page'
+
+/**
+ * Build one plugin-attributed user-role notice, complete with its message identity.
+ *
+ * EVERY injected message MUST carry a non-empty string `id`. This is not cosmetic: the
+ * harness validates stored events when it loads a session log, and
+ *
+ *     assertMessageEventShape: `${subject} lacks an identified message`
+ *
+ * rejects an event whose message has no id. The rejection happens at LOAD time, over the
+ * whole log, so ONE id-less message makes the entire session unreadable —
+ *
+ *     stored session "<id>" is corrupt: ... session event at seq N lacks an identified message
+ *
+ * and every later turn of that session is lost with it. The id is also load-bearing while
+ * running: the inbox keys pending messages by it (`inbox.locate` matches on `message.id`)
+ * and uses it to reject duplicates.
+ *
+ * Core plugins never hit this because they build messages with `createUserMessage()`, which
+ * mints `randomUUID()`. Hand-written literals have no such net — which is exactly how this
+ * plugin shipped 130 corrupt events across three sessions. Hence one constructor for all
+ * three injection sites: a future site cannot forget the id because it does not write the
+ * object literal at all.
+ *
+ * @param {string} text - notice body.
+ * @param {string} summary - short label the UI shows instead of the body.
+ * @returns {object} a complete, identified user-role plugin message.
+ */
+function pluginNotice(text, summary) {
+  return {
+    id: randomUUID(),
+    role: 'user',
+    content: [{ type: 'text', text }],
+    // NOT `{kind:'user'}`: that source clears job wake budgets and resets repeat-reminder
+    // chains. This is the plugin talking, so it says so.
+    source: { kind: 'plugin', plugin: PLUGIN_NAME, form: 'notice', summary },
+  }
+}
 
 /**
  * Tools whose success means the workspace or the runtime changed. Used by the
@@ -517,11 +557,7 @@ export function installEnforcement(ctx, deps) {
           ...decision,
           messages: [
             ...decision.messages,
-            {
-              role: 'user',
-              content: [{ type: 'text', text: renderGoalNudge(work) }],
-              source: { kind: 'plugin', plugin: PLUGIN_NAME, form: 'notice', summary: '没有目标' },
-            },
+            pluginNotice(renderGoalNudge(work), '没有目标'),
           ],
         }
       }
@@ -548,13 +584,7 @@ export function installEnforcement(ctx, deps) {
         ...decision,
         messages: [
           ...decision.messages,
-          {
-            role: 'user',
-            content: [{ type: 'text', text }],
-            // NOT `{kind:'user'}`: that source clears job wake budgets and resets
-            // repeat-reminder chains. This is the plugin talking, so it says so.
-            source: { kind: 'plugin', plugin: PLUGIN_NAME, form: 'notice', summary: '目标状态' },
-          },
+          pluginNotice(text, '目标状态'),
         ],
       }
     })
@@ -722,25 +752,20 @@ export function installEnforcement(ctx, deps) {
       stats.reconcileOffered += 1
 
       const summary = summarize(read.delivery, resolved.goal)
-      agent.steer({
-        role: 'user',
-        content: [
-          {
-            type: 'text',
-            text:
-              '<goal_reconciliation>\n' +
-              `本轮对工作区产生了改动，但目标状态没有相应更新。\n` +
-              `当前目标：${JSON.stringify(resolved.goal.objective)}\n` +
-              `当前焦点：${read.delivery.focus === '' ? '（未设置）' : read.delivery.focus}\n` +
-              `进度：验收 ${summary.acceptance.verified}/${summary.acceptance.total} 已验证；任务 ${summary.tasks.completed}/${summary.tasks.total} 已完成\n\n` +
-              '在结束本轮之前，用 goal_delivery 把状态同步过来：更新任务状态、补充证据、必要时改当前焦点与下一步。\n' +
-              '如果本轮没有产生值得记录的进展，就不要写任何东西——直接说明结论然后结束。\n' +
-              '不要为了通过检查而编造证据：证据必须来自本轮真实跑过的东西。\n' +
-              '</goal_reconciliation>',
-          },
-        ],
-        source: { kind: 'plugin', plugin: PLUGIN_NAME, form: 'notice', summary: '目标状态需要同步' },
-      })
+      agent.steer(
+        pluginNotice(
+          '<goal_reconciliation>\n' +
+            `本轮对工作区产生了改动，但目标状态没有相应更新。\n` +
+            `当前目标：${JSON.stringify(resolved.goal.objective)}\n` +
+            `当前焦点：${read.delivery.focus === '' ? '（未设置）' : read.delivery.focus}\n` +
+            `进度：验收 ${summary.acceptance.verified}/${summary.acceptance.total} 已验证；任务 ${summary.tasks.completed}/${summary.tasks.total} 已完成\n\n` +
+            '在结束本轮之前，用 goal_delivery 把状态同步过来：更新任务状态、补充证据、必要时改当前焦点与下一步。\n' +
+            '如果本轮没有产生值得记录的进展，就不要写任何东西——直接说明结论然后结束。\n' +
+            '不要为了通过检查而编造证据：证据必须来自本轮真实跑过的东西。\n' +
+            '</goal_reconciliation>',
+          '目标状态需要同步',
+        ),
+      )
     })
   }
 

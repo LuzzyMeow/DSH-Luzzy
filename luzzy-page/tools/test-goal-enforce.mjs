@@ -33,6 +33,48 @@ const enforce = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-enforce
 const domain = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-domain.mjs')).href)
 const store = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-store.mjs')).href)
 
+/**
+ * The harness's OWN session validator, so message shape is checked against the real rule
+ * rather than a restatement of it.
+ *
+ * This matters more than it looks. Every injected message this plugin produces becomes a
+ * durable `user/message` event, and the harness validates ALL of them when it loads the log.
+ * A stand-in that merely checks "is there an id field" would agree with whatever this plugin
+ * believes the shape is — which is precisely how three sessions ended up unloadable. Using
+ * `adoptSessionEvent` means the test fails the moment the real rule and this plugin diverge.
+ *
+ * Skips (rather than fails) when the DSH checkout is absent, matching how the other suites
+ * treat installation paths: a missing app is not a defect in this plugin.
+ */
+const DSH_APP = process.env.DSH_APP ?? 'C:\\Program Files\\DSH Desktop\\resources\\app'
+let adoptSessionEvent = null
+try {
+  const session = await import(
+    pathToFileURL(join(DSH_APP, 'node_modules', '@deepseek-ai', 'dsh-session', 'lib', 'index.js')).href
+  )
+  adoptSessionEvent = session.adoptSessionEvent
+} catch {
+  // Left null; the section below reports the skip explicitly instead of quietly passing.
+}
+
+/**
+ * Validate one injected message the way the harness does when loading a stored log.
+ *
+ * @param {object} message - the message as injected.
+ * @returns {string|null} the harness's rejection reason, or null when it is accepted.
+ */
+function storedMessageRejection(message) {
+  if (adoptSessionEvent === null) return null
+  try {
+    // Mirrors `Session.append` for a surface user message, and clones because the harness
+    // freezes what it accepts.
+    adoptSessionEvent({ type: 'user/message', seq: 1, time: Date.now(), data: structuredClone(message), surfaceOp: 'append' })
+    return null
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
 let failures = 0
 let checks = 0
 
@@ -518,6 +560,109 @@ try {
     const text = enforce.renderGoalNudge({ toolCalls: 7 })
     check('the nudge reports the real tool count', text.includes('7'))
     check('and is a hint, not an order', !/你必须|立即/.test(text))
+  }
+
+  console.log('goal-enforce: every injected message carries an identity the harness accepts')
+  {
+    // REGRESSION GUARD for a real, shipped defect: the three injected messages were hand-written
+    // object literals with no `id`. The harness mints ids only inside `createUserMessage()`, so
+    // nothing caught it at runtime — the log was written happily and then refused at LOAD time:
+    //
+    //   stored session "…" is corrupt: session event at seq N lacks an identified message
+    //
+    // One id-less event makes the WHOLE session unreadable, so this was not a cosmetic gap: it
+    // silently cost 130 events across three sessions, and every later turn of those sessions
+    // with them. The assertion below therefore runs on the REAL validator, and drives all three
+    // injection sites rather than the helper, because the defect was exactly "a site forgot".
+    if (adoptSessionEvent === null) {
+      console.log(`  skip the harness validator is unavailable at ${DSH_APP}`)
+    } else {
+      check('the harness validator is wired up', typeof adoptSessionEvent === 'function')
+
+      /** Assert one injected message is identified and accepted by the harness's own rule. */
+      const accepted = (label, message) => {
+        check(`${label}: carries a non-empty id`, typeof message.id === 'string' && message.id !== '')
+        const rejection = storedMessageRejection(message)
+        check(`${label}: the harness accepts it as a stored event`, rejection === null, rejection ?? '')
+      }
+
+      // Site 1 — the goal-state orientation block (`agent/pre-step`).
+      {
+        const paths = freshPaths()
+        const sessionId = 'sess-ident-preflight'
+        store.writeDeliveryOverlay(paths, sessionId, orientablePlan(sessionId), 0)
+        const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+        enforce.resetCounters()
+        enforce.installEnforcement(ctx, { paths, options: {} })
+        const decision = await fire(ctx, 'agent/pre-step',
+          { agent: fakeAgent(sessionId), messages: [], turn: 1, step: 1, signal: {} },
+          { kind: 'enter', messages: [] })
+        eq('the preflight injected one message', decision.messages.length, 1)
+        accepted('goal state', decision.messages[0])
+        enforce.resetCounters()
+      }
+
+      // Site 2 — the no-goal nudge (`agent/pre-step`, different branch).
+      {
+        const paths = freshPaths()
+        const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+        enforce.resetCounters()
+        enforce.installEnforcement(ctx, { paths, options: {} })
+        const decision = await fire(ctx, 'agent/pre-step',
+          { agent: fakeAgent('sess-ident-nudge', WROTE), messages: [], turn: 1, step: 1, signal: {} },
+          { kind: 'enter', messages: [] })
+        eq('the nudge injected one message', decision.messages.length, 1)
+        accepted('goal hint', decision.messages[0])
+        enforce.resetCounters()
+      }
+
+      // Site 3 — the reconciliation steer (`agent/turn-stopping`).
+      {
+        const paths = freshPaths()
+        const sessionId = 'sess-ident-steer'
+        // A plan that genuinely requires reconciliation: an `in_progress` task is one of
+        // `needsReconciliation`'s reasons, so the barrier actually fires. A plan that needed
+        // nothing would leave `steered` empty and assert nothing.
+        let plan = domain.emptyDelivery(sessionId)
+        plan = domain.applyDeliveryOp(plan, 'addAcceptance', { description: '三态都有' }, { at: AT }).delivery
+        plan = domain.applyDeliveryOp(plan, 'addTask', { title: '接 API' }, { at: AT }).delivery
+        plan = domain.applyDeliveryOp(plan, 'setTaskStatus', { id: 'T-001', status: 'in_progress' }, { at: AT }).delivery
+        store.writeDeliveryOverlay(paths, sessionId, plan, 0)
+        const agent = fakeAgent(sessionId, WROTE)
+        const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+        enforce.resetCounters()
+        enforce.installEnforcement(ctx, { paths, options: { minReconcileIntervalMs: 0 } })
+        await fire(ctx, 'agent/turn-stopping', { agent, turn: 1, signal: {} })
+        eq('the barrier steered once', agent.steered.length, 1)
+        accepted('reconciliation request', agent.steered[0])
+      }
+
+      // Two messages from the same site must not share an identity — the inbox rejects
+      // duplicates by id, so a fixed id would trade a load failure for a runtime crash.
+      {
+        const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+        const paths = freshPaths()
+        enforce.resetCounters()
+        enforce.installEnforcement(ctx, { paths, options: {} })
+        const first = await fire(ctx, 'agent/pre-step',
+          { agent: fakeAgent('sess-ident-a', WROTE), messages: [], turn: 1, step: 1, signal: {} },
+          { kind: 'enter', messages: [] })
+        const second = await fire(ctx, 'agent/pre-step',
+          { agent: fakeAgent('sess-ident-b', WROTE), messages: [], turn: 1, step: 1, signal: {} },
+          { kind: 'enter', messages: [] })
+        check('two injected messages have different ids', first.messages[0].id !== second.messages[0].id)
+        enforce.resetCounters()
+      }
+
+      // Negative control: the guard must actually be able to fail. Without this, a validator
+      // that accepted everything would make every assertion above vacuous.
+      {
+        const idless = { role: 'user', content: [{ type: 'text', text: 'x' }], source: { kind: 'plugin', plugin: 'dsh-luzzy-page', form: 'notice', summary: 's' } }
+        const rejection = storedMessageRejection(idless)
+        check('the guard rejects an id-less message (negative control)', rejection !== null, 'the validator accepted a message with no id')
+        check('and names the real reason', rejection !== null && /lacks an identified message/.test(rejection), String(rejection))
+      }
+    }
   }
 
   console.log('goal-enforce: a refusal names WHY (evidence coverage, §86/§87)')
