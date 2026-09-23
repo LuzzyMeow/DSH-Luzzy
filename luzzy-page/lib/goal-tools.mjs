@@ -80,6 +80,12 @@ const ACTION_DESCRIPTIONS = {
   withdrawProposal: 'payload: {id} — withdraw your own pending proposal P-nnn.',
   reconcile: 'payload: {goalId, goalRevision, objective?} — adopt the current runtime goal revision as the plan baseline after the goal was edited.',
   declareNonTask: 'payload: {reason} — declare this session a one-off question or casual exchange, NOT long-running work, so the goal gate stops requiring a goal. Use it for a greeting, an explanation, a quick lookup — things with no acceptance criteria that cannot be "delivered". Say WHY in reason. Do not use it to dodge a real task.',
+  // 状态链与技能清单。这两条是**每轮必答**，所以描述的第一句就是「什么时候调」——
+  // 模型不会读第二个句子，而这条工具的价值全在它被想起来的那一刻。
+  judgeChain: 'payload: {goalMatch, skillCheck} — the per-turn state chain. Call it near the START of EVERY turn, before any work tool: the tool gate refuses work until both answers exist. goalMatch="matched" means this turn advances a long-running goal (a goal must then exist and be complete: objective, acceptance, scope, constraints) — you may still edit the goal mid-flight. goalMatch="none" means this turn is not long-running work and no goal is required. skillCheck="hit" means the skill checklist applies to this turn, which then REQUIRES at least one activateSkill entry (read the full skill first) — skillCheck="none" means it does not apply. Both values are mandatory; "none" is a real answer, not a skip.',
+  activateSkill: 'payload: {name, description, purpose, source} — register a skill you have ACTUALLY READ IN FULL for this task. All four fields are required: name is the skill (e.g. luzzy-roster-design), description is what it covers, purpose is what it does FOR THIS TASK, and source is the repo URL or local path so anyone can go read it. Register only skills whose full text you read — an entry you cannot justify is worse than none, and only the name plus the source is injected each turn afterwards.',
+  setSkill: 'payload: {id, name?, description?, purpose?, source?} — EDIT an activation entry in place (omitted fields stay). Use when the purpose was worded wrong or the source moved; do not register the same skill twice.',
+  removeSkill: 'payload: {id} — DEACTIVATE a skill that turned out not to apply. The activation list is what the user reads, so a stale entry is a false claim about what this task used.',
 }
 
 export const ACTIONS = Object.freeze(Object.keys(ACTION_DESCRIPTIONS))

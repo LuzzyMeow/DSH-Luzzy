@@ -341,6 +341,21 @@ function counterFor(sessionId) {
       /** Step of the injection that last carried a given goal revision. */
       lastInjectedRevision: null,
       lastInjectedStep: -999,
+      /**
+       * 状态链：这一轮答了没有。
+       *
+       * `chainPending` 是**每轮重新置位**的：用户在下一轮说话时它变 true，成功的 judgeChain
+       * 让它变 false。它是运行时事实，所以只在内存里 —— 重启后第一轮重新问一遍是对的，
+       * 而把它持久化会让「本轮还没答」变成一个可能来自上周的陈旧标记。
+       *
+       * `lastUserMessageId` 是「新的一轮」的判据：不靠 step 归零（不同路径下 step 的行为没有
+       * 保证），靠**用户那条消息的 id 变了** —— 这是一个确定的事实。
+       */
+      chainPending: false,
+      lastUserMessageId: null,
+      chainJudgements: 0,
+      chainBlocks: 0,
+      skillBlocks: 0,
     }
     counters.set(sessionId, entry)
   }
@@ -516,6 +531,61 @@ export function renderPreflight(delivery, goal, meta = {}) {
 }
 
 /**
+ * Render the per-turn state chain, plus the skills this turn may rely on.
+ *
+ * WHY THIS IS SEPARATE FROM `renderPreflight`
+ *
+ * The goal block is about WHERE the work stands; this one is about the two DECISIONS that have to
+ * be made before the work starts. They fire on different schedules: the goal block is adaptive
+ * (§83 — it is not worth re-sending an unchanged plan every turn), while the chain block belongs
+ * to the turn itself. Bundling them would have forced one schedule onto both.
+ *
+ * The two branches are the user's: 命中 means this turn advances a long-running goal, 未命中
+ * means it does not and no goal is required. 未命中 is an ANSWER, not a skip — which is why the
+ * block asks for a value rather than for a goal.
+ *
+ * The skill half is the other half of the same message: 命中 means the skill checklist applies,
+ * and then the activation list must not be empty. And the list is deliberately names + sources,
+ * NOT the skill bodies: the full text of a skill is exactly the "inject everything every turn"
+ * mistake §68 forbids, and a model that needs the detail can go read the source it was given.
+ *
+ * @param {object} delivery - normalized overlay.
+ * @param {{owed?: boolean, entry?: object}} [meta] - whether an answer is still owed this turn.
+ * @returns {string} a `<state_chain>` block.
+ */
+export function renderChain(delivery, meta = {}) {
+  const skills = Array.isArray(delivery.skills) ? delivery.skills : []
+  const chain = delivery.chain ?? { goalMatch: null, skillCheck: null }
+  const lines = ['<state_chain>']
+  lines.push('【状态链 · 每轮都要走】动手之前先答这两步，答案是工具调用，不是心里想一下：')
+  lines.push('① 本轮是不是在推进一个长任务（目标分支）？')
+  lines.push('   命中 → 目标必须完整：目标 / 验收标准 / 范围边界 / 已知约束。每轮都会随本块注入；执行途中发现计划不对，**可以改**（' + DELIVERY_TOOL + '）。')
+  lines.push('   未命中 → 本轮不要求目标，但这一步照样要答。')
+  lines.push('② 本轮要不要按技能清单执行（技能分支）？')
+  lines.push('   命中 → **先把那份 skill 的完整正文读一遍**，再用 activateSkill 登记：技能名称 / 技能描述 / 针对本次任务的作用 / 来源（仓库链接或本地路径）。四项缺一不可。')
+  lines.push('   未命中 → 本轮不按技能清单。')
+  lines.push(`答法：${DELIVERY_TOOL}(action="judgeChain", payload={goalMatch: "matched"|"none", skillCheck: "hit"|"none"})`)
+  // An unanswered chain is the ONE thing worth repeating inside the turn: the work tools are
+  // actually held until it is answered, so a silent repetition would just look like a stuck turn.
+  if (meta.owed === true) {
+    lines.push('（本轮还没答 —— 在工作类工具被放行之前必须先答。这两条没有默认值。）')
+  }
+
+  if (skills.length > 0) {
+    lines.push('')
+    lines.push(`【已激活技能 · ${skills.length} 项】只给名字与来源，正文不注入：`)
+    for (const row of skills.slice(0, 8)) {
+      lines.push(`- ${row.name} —— ${row.purpose}`)
+      lines.push(`  来源：${row.source}`)
+    }
+    if (skills.length > 8) lines.push(`（还有 ${skills.length - 8} 项，见「技能」页）`)
+    lines.push('一旦对某个技能的用法模糊，**去上面的来源读完整正文**，不要凭印象用。')
+  }
+  lines.push('</state_chain>')
+  return lines.join('\n')
+}
+
+/**
  * Render the refusal the session gate returns when a session tries to act with no goal.
  *
  * This is a TOOL ERROR, not a system-prompt sentence, and that changes what it has to do. The
@@ -598,6 +668,79 @@ export function renderIncompleteGoalRefusal(toolName, missing, entry) {
       `（这是本会话第 ${entry.gateBlocks} 次被拦。缺的就是上面那几项，` +
         '重复调用工具不会让它们出现。）',
     )
+  }
+  return lines.join('\n')
+}
+
+/**
+ * 状态链的门：本轮还没答那两步判断。
+ *
+ * 这是**每轮**都会拦一次的门，所以文案的重点不是「你违规了」，而是「这一步怎么做，一次就过」。
+ * 一个每轮都会出现的拒绝如果说不清怎么过，就会变成模型每轮撞一次的墙 —— 那比不设门更糟。
+ *
+ * @param {string} toolName - the call that was refused.
+ * @param {object} entry - this session's counters.
+ * @returns {string} refusal reason.
+ */
+export function renderChainGateRefusal(toolName, entry) {
+  const lines = [
+    `STATE_CHAIN_REQUIRED: 本轮的状态链还没答，「${toolName}」暂时不能用。`,
+    '',
+    '两步都要答，一次调用答完：',
+    '',
+    `    ${DELIVERY_TOOL}(action="judgeChain", payload={goalMatch: "matched"|"none", skillCheck: "hit"|"none"})`,
+    '',
+    '① **goalMatch** — 本轮是不是在推进一个长任务？',
+    '   命中 → 目标必须完整（目标 / 验收标准 / 范围 / 已知约束），而且每轮都会被注入回来；',
+    '        执行途中发现计划不对，**可以改**：setTask / setFocus / setNext / addEvidence 等。',
+    '   未命中 → 本轮不要求目标。这不是跳过，是另一个答案。',
+    '',
+    '② **skillCheck** — 本轮要不要按技能清单执行？',
+    '   命中 → 先把那份 skill 的**完整正文**读一遍，再 activateSkill 登记四项：',
+    '        技能名称 / 技能描述 / 针对本次任务的作用 / 来源（仓库链接或本地路径）。',
+    '        没登记之前，工作类工具照样不能用 —— 否则「命中了」就只是一句没法核对的话。',
+    '   未命中 → 直接答 none。',
+    '',
+    '答完这一轮就放行；下一轮会再问一次。',
+  ]
+  if (entry.chainBlocks >= 3) {
+    lines.push('')
+    lines.push(`（这是本会话第 ${entry.chainBlocks} 次被这一步拦。答它的工具就在上面那一行，别绕。）`)
+  }
+  return lines.join('\n')
+}
+
+/**
+ * 技能清单的门：这一轮命中技能清单，但一条激活记录都没有。
+ *
+ * 单独一条拒绝文案的理由同 `renderIncompleteGoalRefusal`：**「你答了命中但什么都没登记」**和
+ * **「你还没答」**是两个不同的问题，给出同一个理由会让模型去改错的地方。
+ *
+ * @param {string} toolName - the call that was refused.
+ * @param {object} entry - this session's counters.
+ * @returns {string} refusal reason.
+ */
+export function renderSkillGateRefusal(toolName, entry) {
+  const lines = [
+    `SKILL_LIST_EMPTY: 本轮答了「命中技能清单」，但一条激活记录都没有，「${toolName}」暂时不能用。`,
+    '',
+    '命中的意思是「这一轮要按某份 skill 来做」，那就要说清是哪一份、为什么：',
+    '',
+    `    ${DELIVERY_TOOL}(action="activateSkill", payload={`,
+    '      name:        skill 名称，例如 luzzy-roster-design',
+    '      description: 这个 skill 管什么',
+    '      purpose:     针对**本次任务**的作用（不是它的简介）',
+    '      source:      仓库链接或本地路径，让人能自己去读全文',
+    '    })',
+    '',
+    '四项缺一不可 —— 缺任何一项，这条记录都答不出「为什么这一轮要用它」。',
+    '登记的前提是**真的读完了那份 skill 的正文**：填不出来的那条就不要登记。',
+    '',
+    '如果读完发现这一轮其实用不上，把 skillCheck 改成 "none" 也是一种答法。',
+  ]
+  if (entry.skillBlocks >= 3) {
+    lines.push('')
+    lines.push('（反复被这一步拦，通常是因为登记的是「我打算读」而不是读过的东西。）')
   }
   return lines.join('\n')
 }
@@ -697,6 +840,13 @@ export function installEnforcement(ctx, deps) {
     nonTaskDeclared: 0,
     /** Injections that fired because the goal revision moved, not because the interval did. */
     preflightOnChange: 0,
+    /**
+     * 状态链那两道新门的计数。§87 说的正是这个：**只看「调了几次工具」证明不了系统在转**，
+     * 要看的是「判断覆盖率」与「门真的拦下过吗」。一个计数恒为零的门不是门。
+     */
+    chainBlocked: 0,
+    skillBlocked: 0,
+    chainJudged: 0,
   }
 
   // ---- layer 4: orient the model before it works ---------------------------
@@ -727,9 +877,39 @@ export function installEnforcement(ctx, deps) {
       if (typeof sessionId !== 'string') return decision
 
       const entry = counterFor(sessionId)
-      const resolved = liveGoalFor(ctx, agent)
 
-      if (resolved.state !== 'ok' || resolved.goal === undefined) {
+      // ---- 状态链：每一轮都要走 ----------------------------------------------
+      //
+      // 「每轮」的判据是**用户那条消息换了**，不是 step 归零 —— step 的行为在不同进入路径下没有
+      // 保证，而「用户又说了一句」是一个确定的事实。拿消息 id 当轮次身份是安全的：id 由宿主铸造，
+      // 一条没有 id 的消息会把整个会话写坏（§5.31），所以这个字段一定在。
+      //
+      // 我们自己的注入也是 user 角色（`source.kind === 'plugin'`），必须排除。不排除的话，同一条
+      // 用户消息会在下一个 step 被认成新的一轮，链就会自己一直重新置位 —— 一个自己给自己续期的门。
+      const turnOwnerId = (() => {
+        for (let i = decision.messages.length - 1; i >= 0; i -= 1) {
+          const message = decision.messages[i]
+          if (message?.role !== 'user') continue
+          if (message?.source?.kind === 'plugin') continue
+          if (typeof message.id === 'string') return message.id
+        }
+        return null
+      })()
+      const newTurn = turnOwnerId !== null && turnOwnerId !== entry.lastUserMessageId
+      if (newTurn) {
+        entry.lastUserMessageId = turnOwnerId
+        // 新的一轮 = 链要重新答一遍。这是「每次对话都要执行状态链」的运行时那一半：
+        // 注入负责说，这个标记负责**锁**（门在 tools/pre-execute 里）。
+        entry.chainPending = true
+      }
+
+      const resolved = liveGoalFor(ctx, agent)
+      const hasGoal = resolved.state === 'ok' && resolved.goal !== undefined
+
+      // 没有目标时：仍然要先算「要不要提醒建目标」，但它不再是这条路的分叉点 —— 链在有目标和
+      // 没目标两种情况下都要注入（用户的要求：每次对话都走状态链，没命中也要答）。
+      let nudge = null
+      if (!hasGoal) {
         stats.preflightMiss += 1
         entry.preflightMisses += 1
         // ---- AC-001: a long task should get a goal --------------------------
@@ -751,18 +931,16 @@ export function installEnforcement(ctx, deps) {
         // by decision — and the whole point of AC-001 is that the choice gets made. Now the
         // reminder is per PHASE: it re-asks once the session has moved on, while still not
         // repeating on every step (§83's token discipline).
-        if (step - entry.lastGoalNudgeStep < options.goalReminderEverySteps) return decision
-        const work = observeTurn(agent)
-        if (!work.wroteFiles && !work.ranCommand) return decision
-        entry.lastGoalNudgeStep = step
-        entry.goalNudgeCount = (entry.goalNudgeCount ?? 0) + 1
-        stats.goalNudged += 1
-        return {
-          ...decision,
-          messages: [
-            ...decision.messages,
-            pluginNotice(renderGoalNudge(work, entry.goalNudgeCount), '没有目标'),
-          ],
+        // 这一段原来在「没有目标」的分支里直接 return，于是没有目标时链就不会下发 —— 那正好
+        // 与用户要的两条分支相反。现在它只决定 remind 的内容，注入统一在下面合成。
+        if (step - entry.lastGoalNudgeStep >= options.goalReminderEverySteps) {
+          const work = observeTurn(agent)
+          if (work.wroteFiles || work.ranCommand) {
+            entry.lastGoalNudgeStep = step
+            entry.goalNudgeCount = (entry.goalNudgeCount ?? 0) + 1
+            stats.goalNudged += 1
+            nudge = renderGoalNudge(work, entry.goalNudgeCount)
+          }
         }
       }
       // ---- injection policy: WHY to inject, not just how often --------------
@@ -780,37 +958,69 @@ export function installEnforcement(ctx, deps) {
       // revision case is self-limiting (revisions change when something changed), and the
       // interval case is the throttle the model already had.
       const lastRevision = entry.lastInjectedRevision
-      const thisRevision = resolved.goal.revision
+      const thisRevision = hasGoal ? resolved.goal.revision : null
       const isInitial = entry.preflights === 0
-      const changed = lastRevision !== null && lastRevision !== thisRevision
+      const changed = hasGoal && lastRevision !== null && lastRevision !== thisRevision
       const dueByInterval =
         !(entry.lastPreflightTurn === turn && step - entry.lastPreflightStep < options.preflightEverySteps)
+      // 新的一轮一定下发目标（用户要的「每轮注入」）；一轮之内的重复仍然交给节流，否则一个长
+      // 回合会把同一份计划重复塞十几次，那正是 §83 说的浪费。
+      const goalDue = hasGoal && (newTurn || isInitial || changed || dueByInterval)
+      // 链该不该说：新一轮要说，本轮还没答（比如刚被门拦下）也要说。
+      const chainDue = newTurn || entry.chainPending
 
-      if (!isInitial && !changed && !dueByInterval) return decision
+      if (!chainDue && !goalDue && nudge === null) return decision
 
-      const read = readDeliveryOverlay(paths, sessionId)
-      if (!read.ok) {
-        stats.preflightMiss += 1
-        entry.preflightMisses += 1
-        return decision
+      // 三块（链 / 目标 / 技能）说的是同一份状态，只读一次：读两遍除了多一次 IO，还会在两次读
+      // 之间留一个不一致的窗口 —— 而这是每轮都要走的路径。
+      let delivery = null
+      if (chainDue || goalDue) {
+        const read = readDeliveryOverlay(paths, sessionId)
+        if (!read.ok) {
+          stats.preflightMiss += 1
+          entry.preflightMisses += 1
+          // 读不出来就不注入。但**不清 chainPending**：「我读不出来」不等于「模型答过了」，
+          // 门会继续持有工作类工具，模型只能去解决读不出来的原因。
+          if (nudge === null) return decision
+        } else {
+          delivery = read.delivery
+        }
       }
 
-      entry.lastPreflightTurn = turn
-      entry.lastPreflightStep = step
-      entry.preflights += 1
-      entry.lastInjectedRevision = thisRevision
-      stats.preflight += 1
-      if (changed) stats.preflightOnChange += 1
+      // ---- 合成一条消息，而不是三条 ------------------------------------------
+      //
+      // 一次一步里插三条 notice，模型读到的是三段互不相干的独白；合成一条，读到的是一次
+      // 「这一轮的处境」。顺序也是有意的：链在前（它决定这一轮怎么开工），目标在中，技能在链
+      // 里（`renderChain` 自己带已激活技能的名字与来源），提醒在最后。
+      const parts = []
+      let summary = '没有目标'
+      if (chainDue && delivery !== null) {
+        parts.push(renderChain(delivery, { owed: entry.chainPending }))
+        summary = '状态链'
+      }
+      if (goalDue && delivery !== null) {
+        entry.lastPreflightTurn = turn
+        entry.lastPreflightStep = step
+        entry.preflights += 1
+        entry.lastInjectedRevision = thisRevision
+        stats.preflight += 1
+        if (changed) stats.preflightOnChange += 1
 
-      const artifact = deps.artifacts?.describe(sessionId) ?? undefined
-      // A revision the model has not seen is the one case where "what changed" is worth the
-      // bytes: the block already carries the revision, and saying WHY it is being repeated
-      // stops the model from reading a second injection as noise.
-      const text = renderPreflight(read.delivery, resolved.goal, {
-        artifactPath: artifact?.path,
-        changedSinceLastInjection: changed,
-      })
-      const notice = pluginNotice(text, changed ? '目标已更新' : '目标状态')
+        const artifact = deps.artifacts?.describe(sessionId) ?? undefined
+        // A revision the model has not seen is the one case where "what changed" is worth the
+        // bytes: the block already carries the revision, and saying WHY it is being repeated
+        // stops the model from reading a second injection as noise.
+        parts.push(
+          renderPreflight(delivery, resolved.goal, {
+            artifactPath: artifact?.path,
+            changedSinceLastInjection: changed,
+          }),
+        )
+        if (summary !== '状态链') summary = changed ? '目标已更新' : '目标状态'
+      }
+      if (nudge !== null) parts.push(nudge)
+      if (parts.length === 0) return decision
+      const notice = pluginNotice(parts.join('\n\n'), summary)
       // WHERE the notice goes, and why it is not the tail.
       //
       // This used to append to the end of `decision.messages`. The core's own context-injecting
@@ -891,25 +1101,67 @@ export function installEnforcement(ctx, deps) {
       }
 
       const resolved = liveGoalFor(ctx, exec.agent)
-      if (resolved.state === 'ok' && resolved.goal !== undefined) {
-        // A goal EXISTS — but a goal with no acceptance criteria, no scope and no constraints
-        // cannot answer "when is this done", so opening the gate on it would just move the
-        // failure later, to the completion gate, after the work is already built. The brief's
-        // §20 refuses completion on an empty plan; refusing to START on one is the same check
-        // applied where it is still cheap to act on. This is the "必须填补所有缺失项" rule.
-        const read = readDeliveryOverlay(paths, sessionId)
-        if (read.ok) {
-          const missing = missingGoalFields(read.delivery)
-          if (missing.length === 0) return decision
-          stats.gateBlocked += 1
-          entry.gateBlocks += 1
-          return { kind: 'deny', reason: renderIncompleteGoalRefusal(exec.name, missing, entry) }
-        }
-      }
-      // A session whose goal was deleted mid-flight is back at the gate. That is deliberate:
-      // "no goal" is the condition, not "never had one".
-      if (entry.nonTaskDeclared) return decision
+      const read = readDeliveryOverlay(paths, sessionId)
 
+      // ---- 门 1：状态链（每轮一次） -------------------------------------------
+      //
+      // 这是用户要的第二道门，与目标门长在同一个 seam 上：**必须有这个判断，不然直接锁工具**。
+      // 之所以能这么做门，是因为拒绝发生在 tools/pre-execute —— 对话没断，模型收到拒绝后照常
+      // 在同一轮里回答并继续（见本节开头关于 pre-step 的说明）。
+      //
+      // 判据在内存里（`chainPending`，在 pre-step 每轮置位），不读持久状态：**「本轮答没答」是
+      // 运行时事实**，存到盘上会变成一个可能来自上周的陈旧标记，而那正是最危险的一类错。
+      if (entry.chainPending) {
+        stats.chainBlocked += 1
+        entry.chainBlocks += 1
+        return { kind: 'deny', reason: renderChainGateRefusal(exec.name, entry) }
+      }
+
+      if (read.ok) {
+        const chain = read.delivery.chain ?? { goalMatch: null, skillCheck: null }
+
+        // ---- 门 2：目标（只在命中分支上） -------------------------------------
+        //
+        // 两条分支的分岔就在这里：命中 → 目标必须完整；未命中 → 本轮不要求目标。后者是用户
+        // 明确要的（「其二分支时允许 Agent 无需强制填写目标」），所以它不是漏洞，是另一半设计。
+        if (chain.goalMatch !== 'none') {
+          if (resolved.state === 'ok' && resolved.goal !== undefined) {
+            // A goal EXISTS — but a goal with no acceptance criteria, no scope and no constraints
+            // cannot answer "when is this done", so opening the gate on it would just move the
+            // failure later, to the completion gate, after the work is already built. The brief's
+            // §20 refuses completion on an empty plan; refusing to START on one is the same check
+            // applied where it is still cheap to act on. This is the "必须填补所有缺失项" rule.
+            const missing = missingGoalFields(read.delivery)
+            if (missing.length === 0) {
+              // 目标这一关过了 —— 但不 return，技能那一关还没查（见下）。
+            } else {
+              stats.gateBlocked += 1
+              entry.gateBlocks += 1
+              return { kind: 'deny', reason: renderIncompleteGoalRefusal(exec.name, missing, entry) }
+            }
+          } else if (!entry.nonTaskDeclared) {
+            // A session whose goal was deleted mid-flight is back at the gate. That is deliberate:
+            // "no goal" is the condition, not "never had one".
+            stats.gateBlocked += 1
+            entry.gateBlocks += 1
+            return { kind: 'deny', reason: renderGateRefusal(exec.name, entry) }
+          }
+        }
+
+        // ---- 门 3：技能清单（只说「命中」不算） -------------------------------
+        //
+        // 「必须有这个判断，不然直接锁工具」在这里的下半句是：**判断成命中之后，登记也要真的
+        // 发生**。否则 skillCheck="hit" 就是一句无法核对的话，而它的全部价值就在于可核对。
+        if (chain.skillCheck === 'hit' && read.delivery.skills.length === 0) {
+          stats.skillBlocked += 1
+          entry.skillBlocks += 1
+          return { kind: 'deny', reason: renderSkillGateRefusal(exec.name, entry) }
+        }
+        return decision
+      }
+
+      // 读不出交付状态时不放行：门的价值就在于「我查不到」不能等于「那就上吧」。
+      if (entry.nonTaskDeclared) return decision
       stats.gateBlocked += 1
       entry.gateBlocks += 1
       return { kind: 'deny', reason: renderGateRefusal(exec.name, entry) }
@@ -963,6 +1215,44 @@ export function installEnforcement(ctx, deps) {
       // process gap.
       if (gate.missingEvidence.length > 0) stats.evidenceMissing += 1
       return { kind: 'deny', reason: renderCompletionRefusal(gate) }
+    })
+  }
+
+  // ---- 状态链的收尾：答成功了才清「本轮欠答」 ------------------------------
+  //
+  // 为什么在 post-execute 而不是在门的开头猜参数：门的职责是「答了没有」，而**答成功没有**只有
+  // 结果知道。在门里看到 `action === "judgeChain"` 就把标记清掉，会让一次被拒的调用（缺字段、
+  // 写盘冲突）也算作答过 —— 于是链门在最重要的情况下自己放开。
+  //
+  // 状态从工具自己渲染的文本里读（`goal-tools.mjs` 的 render 把 JSON 拼在状态词后面），
+  // 先用 JSON 里的 "status"，再退回行首的状态词。两种形状都不认就当成没答过：**保守方向是
+  // 保持门关着**，因为门的另一边是「模型可以一边说不清这一轮要干什么一边改文件」。
+  const readToolStatus = (parts) => {
+    if (!Array.isArray(parts)) return null
+    const text = parts.map((part) => (part?.type === 'text' ? part.text : '')).join('').trim()
+    if (text === '') return null
+    const inJson = text.match(/"status"\s*:\s*"(ok|refused|error)"/)
+    if (inJson !== null) return inJson[1]
+    const asPrefix = text.match(/^(ok|refused|error)\s*:/)
+    return asPrefix === null ? null : asPrefix[1]
+  }
+
+  if (options.sessionGate) {
+    ctx.on('tools/post-execute', async (exec, result, next) => {
+      const decision = await next()
+      if (exec.name !== DELIVERY_TOOL) return decision
+      if (exec.agent === undefined) return decision
+      const sessionId = exec.agent.session?.id
+      if (typeof sessionId !== 'string') return decision
+      const entry = counterFor(sessionId)
+      if (!entry.chainPending) return decision
+      const args = typeof exec.arguments === 'object' && exec.arguments !== null ? exec.arguments : {}
+      if (args.action !== 'judgeChain') return decision
+      if (readToolStatus(decision.content ?? result?.content) !== 'ok') return decision
+      entry.chainPending = false
+      entry.chainJudged += 1
+      stats.chainJudged += 1
+      return decision
     })
   }
 

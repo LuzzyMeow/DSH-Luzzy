@@ -43,9 +43,20 @@ export const MAX_DECISIONS = 500
 export const MAX_BLOCKERS = 200
 export const MAX_PROPOSALS = 200
 export const MAX_CHANGES = 500
+export const MAX_SKILLS = 100
 export const MAX_TEXT_CHARS = 2000
 export const MAX_FOCUS_CHARS = 400
 export const MAX_NEXT_ITEMS = 20
+
+/**
+ * 状态链的两次判断的取值。
+ *
+ * 两条分支就是用户给的那两条：命中（这一轮在推进一个长任务）与未命中（不是）。未命中不是
+ * 「跳过流程」——判断本身必须做，只是判断的结果允许本轮不填目标。
+ */
+export const CHAIN_GOAL_MATCH = Object.freeze(['matched', 'none'])
+/** 技能清单的两次判断：命中就要登记激活的技能，未命中就明确说没命中。 */
+export const CHAIN_SKILL_CHECK = Object.freeze(['hit', 'none'])
 
 /**
  * Stable machine-routable codes.
@@ -227,6 +238,24 @@ export function emptyDelivery(sessionId) {
     changes: [],
     focus: '',
     next: [],
+    /**
+     * 状态链：每一轮都要走的那两步判断。
+     *
+     * `goalMatch` —— 这一轮是否在推进一个长期目标（命中／未命中）
+     * `skillCheck` —— 这一轮是否要按技能清单执行（命中／未命中）
+     *
+     * 存下来不是为了「记着」，是为了**页面能显示它**：看不见的判断等于没有判断，而
+     * 「Agent 到底有没有走这两步」正是用户要看的东西。是否“本轮还没判断”是运行时事实
+     * （见 goal-enforce 的 chain 计数器），不在这里——这一层是持久状态，不是时钟。
+     */
+    chain: { goalMatch: null, skillCheck: null, at: 0 },
+    /**
+     * 激活的技能清单：Agent 实际读完某个 skill 的**完整正文**之后登记的条目。
+     *
+     * 四个字段全部必填（名称 / 描述 / 本次作用 / 来源），因为缺任何一个这条记录都不能回答
+     * 「为什么这一轮要用它」。来源是仓库链接或本地路径——正文不注入，需要细节时照这个去找。
+     */
+    skills: [],
     revision: 0,
     updatedAt: 0,
   }
@@ -450,6 +479,32 @@ export function normalizeDelivery(raw, sessionId) {
     if (changes.length >= MAX_CHANGES) break
   }
   delivery.changes = changes
+
+  // 状态链：两个取值各自白名单，认不出来的一律当「还没判断」——这比猜一个值安全，
+  // 因为猜错会让页面显示一个 Agent 从没做过的判断。
+  const rawChain = isRecord(raw.chain) ? raw.chain : {}
+  delivery.chain = {
+    goalMatch: oneOf(rawChain.goalMatch, CHAIN_GOAL_MATCH, null),
+    skillCheck: oneOf(rawChain.skillCheck, CHAIN_SKILL_CHECK, null),
+    at: nonNegativeInteger(rawChain.at),
+  }
+
+  const skills = []
+  for (const entry of Array.isArray(raw.skills) ? raw.skills : []) {
+    if (!isRecord(entry)) continue
+    const id = text(entry.id, 32)
+    const name = text(entry.name, 200)
+    const description = text(entry.description)
+    const purpose = text(entry.purpose)
+    const source = text(entry.source, 1000)
+    // 四个字段一个都不能少：少一个这条记录就答不出「为什么这一轮要用它」，那它就不是
+    // 激活记录，只是一行噪音。整条丢掉并留一条 warning，而不是渲染成半条。
+    if (id === undefined || !/^S-\d{3,}$/.test(id)) continue
+    if (name === undefined || description === undefined || purpose === undefined || source === undefined) continue
+    skills.push({ id, name, description, purpose, source, at: nonNegativeInteger(entry.at) })
+    if (skills.length >= MAX_SKILLS) break
+  }
+  delivery.skills = skills
 
   return { ok: true, delivery, warnings }
 }
@@ -1286,6 +1341,93 @@ export function applyDeliveryOp(delivery, op, payload, context) {
       return { delivery: next }
     }
 
+    // ---- 状态链：每一轮都要答的两步 ------------------------------------------
+    case 'judgeChain': {
+      // 为什么是「必须回答」而不是「必须命中」：用户要的两条分支都从**同一个判断**出发。
+      // 未命中不是跳过，是另一个答案 —— 它允许本轮不建目标，但判断本身照做，而且留下痕迹。
+      // 两个值都走白名单：含糊的字符串会让页面显示一个 Agent 从没做过的判断。
+      const goalMatch = oneOf(input.goalMatch, CHAIN_GOAL_MATCH, null)
+      const skillCheck = oneOf(input.skillCheck, CHAIN_SKILL_CHECK, null)
+      if (goalMatch === null || skillCheck === null) {
+        return {
+          error: 'judgeChain 需要 payload.goalMatch（matched|none）与 payload.skillCheck（hit|none）两个值都填。',
+          code: ERROR_CODES.INVALID_STATE,
+        }
+      }
+      next.chain = { goalMatch, skillCheck, at }
+      recordChange(next, at, actor, 'judge-chain', `goalMatch=${goalMatch} skillCheck=${skillCheck}`, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next }
+    }
+
+    // ---- 激活技能清单 ---------------------------------------------------------
+    case 'activateSkill': {
+      if (next.skills.length >= MAX_SKILLS) return { error: `激活技能已达上限 ${MAX_SKILLS}`, code: ERROR_CODES.INVALID_STATE }
+      // 四个字段全部必填。这条记录存在的理由是回答「为什么这一轮要用它」，缺任何一半都答不出来
+      // —— 那就只是一行噪音，而噪音会让真正读过的那几条显得同样可疑。
+      const name = text(input.name, 200)
+      const description = text(input.description)
+      const purpose = text(input.purpose)
+      const source = text(input.source, 1000)
+      const missing = []
+      if (name === undefined) missing.push('name（技能名称）')
+      if (description === undefined) missing.push('description（技能描述）')
+      if (purpose === undefined) missing.push('purpose（针对本次任务的作用）')
+      if (source === undefined) missing.push('source（仓库链接或本地路径）')
+      if (missing.length > 0) {
+        return { error: `activateSkill 还缺：${missing.join('、')}`, code: ERROR_CODES.INVALID_STATE }
+      }
+      if (next.skills.some((row) => row.name === name)) {
+        return { error: `技能 ${name} 已经登记过。要改描述或作用用 setSkill，不要登记两条。`, code: ERROR_CODES.INVALID_STATE }
+      }
+      const row = { id: nextId('S', next.skills), name, description, purpose, source, at }
+      next.skills.push(row)
+      clampPush(next.skills, MAX_SKILLS)
+      recordChange(next, at, actor, `activate ${row.id}`, `${name} —— ${purpose}`, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next, created: row.id }
+    }
+
+    case 'setSkill': {
+      const id = text(input.id, 32) ?? ''
+      const row = next.skills.find((entry) => entry.id === id)
+      if (row === undefined) return { error: `激活技能 ${id} 不存在`, code: ERROR_CODES.NOT_FOUND }
+      const name = text(input.name, 200)
+      const description = text(input.description)
+      const purpose = text(input.purpose)
+      const source = text(input.source, 1000)
+      if (name === undefined && description === undefined && purpose === undefined && source === undefined) {
+        return { error: 'setSkill 至少要给一个要改的字段', code: ERROR_CODES.INVALID_STATE }
+      }
+      // 省略的字段保持不变 —— 与 setTask 同一口径：改一个错别字不该逼调用方重述整条。
+      if (name !== undefined) {
+        if (next.skills.some((entry) => entry.id !== id && entry.name === name)) {
+          return { error: `技能 ${name} 已经登记过`, code: ERROR_CODES.INVALID_STATE }
+        }
+        row.name = name
+      }
+      if (description !== undefined) row.description = description
+      if (purpose !== undefined) row.purpose = purpose
+      if (source !== undefined) row.source = source
+      recordChange(next, at, actor, `edit ${row.id}`, row.name, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next }
+    }
+
+    case 'removeSkill': {
+      const id = text(input.id, 32) ?? ''
+      const row = next.skills.find((entry) => entry.id === id)
+      if (row === undefined) return { error: `激活技能 ${id} 不存在`, code: ERROR_CODES.NOT_FOUND }
+      next.skills = next.skills.filter((entry) => entry.id !== id)
+      recordChange(next, at, actor, `deactivate ${id}`, row.name, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next, removed: id }
+    }
+
     default:
       return { error: `未知操作 "${op}"`, code: ERROR_CODES.INVALID_STATE }
   }
@@ -1370,6 +1512,12 @@ export const DELIVERY_OPS = Object.freeze([
   'withdrawProposal',
   'reconcile',
   'declareNonTask',
+  // 状态链与激活技能清单。这两样是**执行记录**，不是人类权威字段 —— 与 Evidence /
+  // Decision Log 同一类（§65 的 Agent 列），所以归 Agent 写。页面只投影，不写。
+  'judgeChain',
+  'activateSkill',
+  'setSkill',
+  'removeSkill',
 ])
 
 /**
@@ -1749,6 +1897,35 @@ export function renderGoalMarkdown(delivery, runtimeGoal, meta = {}) {
     }
   }
   lines.push('')
+
+  if (delivery.skills.length > 0 || delivery.chain.goalMatch !== null) {
+    lines.push('## 附：状态链与激活技能')
+    lines.push('')
+    const matchLabel = delivery.chain.goalMatch === 'matched'
+      ? '命中（这一轮在推进一个长期目标）'
+      : delivery.chain.goalMatch === 'none' ? '未命中（本轮不是长期任务）' : '（还没判断）'
+    const skillLabel = delivery.chain.skillCheck === 'hit'
+      ? '命中（按技能清单执行）'
+      : delivery.chain.skillCheck === 'none' ? '未命中（本轮不按技能清单）' : '（还没判断）'
+    lines.push(`- 目标分支：${matchLabel}${delivery.chain.at === 0 ? '' : `（${formatStamp(delivery.chain.at)}）`}`)
+    lines.push(`- 技能清单分支：${skillLabel}`)
+    lines.push('')
+    if (delivery.skills.length === 0) {
+      lines.push('（还没有激活任何技能）')
+    } else {
+      for (const row of delivery.skills) {
+        lines.push(`### ${row.id} ${inline(row.name)}`)
+        lines.push('')
+        lines.push(`- 技能描述：${inline(row.description)}`)
+        lines.push(`- 本次任务的作用：${inline(row.purpose)}`)
+        lines.push(`- 来源：${inline(row.source)}`)
+        lines.push(`- 激活时间：${formatStamp(row.at)}`)
+        lines.push('')
+      }
+      lines.pop()
+    }
+    lines.push('')
+  }
 
   if (delivery.proposals.filter((row) => row.status === 'pending').length > 0) {
     lines.push('## 附：待确认的变更提案')
