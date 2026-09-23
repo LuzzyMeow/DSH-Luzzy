@@ -169,6 +169,31 @@ export const DEFAULT_ENFORCE_OPTIONS = Object.freeze({
    */
   preflightEverySteps: 6,
   /**
+   * How many preflights may pass before the objective's FULL text is inlined again.
+   *
+   * WHY THIS EXISTS — the compact block drifted.
+   *
+   * Everything above says this block is compact and never the artifact. The code did the
+   * opposite: it printed `目标：${JSON.stringify(goal.objective)}` verbatim. Measured on the live
+   * session (12.7 MB transcript), that line alone was **25,604 characters**, re-sent on every
+   * user turn — 6.8 MB of `<goal_state>` text across the session. That is §68 方案 B, the exact
+   * implementation the brief forbids, and the opposite of §82/§83.
+   *
+   * So the objective's text is now LAZY, and comes back on four triggers rather than never:
+   *
+   *   1. `isInitial`  — the first preflight of a session: the model has certainly not seen it.
+   *   2. `changed`    — the revision moved: what it remembers is now wrong.
+   *   3. `compacted`  — a context compaction replaced the history (see `compactionCheckpoint`).
+   *   4. this value   — the floor, so a long session cannot drift indefinitely on a summary
+   *                     alone. 10 preflights ≈ 10 user turns; a compaction lands in that range.
+   *
+   * The compact path can never fire WITHOUT a statement of intent: `renderPreflight` forces the
+   * full text back whenever both 概览目标 and 预期产出 are empty. "Forgot the goal" is therefore
+   * not a state this policy can reach — the worst case is that the model holds a summary instead
+   * of the original words, and `get_goal` is one call away.
+   */
+  preflightFullEvery: 10,
+  /**
    * Whether a session with no goal is held at the goal gate before it may act.
    *
    * This is the v2 upgrade: without it the layer only ever ASKS the model to notice the goal
@@ -358,6 +383,17 @@ function counterFor(sessionId) {
       /** Step of the injection that last carried a given goal revision. */
       lastInjectedRevision: null,
       lastInjectedStep: -999,
+      /** `preflights` count at the injection that last carried the objective's full text. */
+      lastFullPreflight: -999,
+      /**
+       * The compaction checkpoint this session has already reacted to.
+       *
+       * LATCHED, and that is the whole reason it is stored: after a compaction the checkpoint
+       * message STAYS in the transcript — it is what replaced the compacted history. Detecting
+       * "a compaction happened" without remembering WHICH one would then be true on every
+       * remaining step of the session, and the full objective would come back forever.
+       */
+      lastCompactionId: null,
       /**
        * 状态链：这一轮答了没有。
        *
@@ -538,14 +574,55 @@ export function renderPreflight(delivery, goal, meta = {}) {
     // "the harness is repeating itself" and "the goal moved under you, re-read it".
     lines.push('（目标自上次下发后已变更——以这一段为准。）')
   }
-  lines.push(`目标：${JSON.stringify(goal.objective)}`)
-  lines.push(`阶段：${goal.phase}${goal.phase === 'active' ? `（续行${goal.activation === 'armed' ? '已启用' : '未启用'}）` : ''} · 修订 ${goal.revision} · 轮次 ${goal.roundsStarted}/${goal.maxGoalRounds}`)
+
+  // ---- the operative statement, in the model's own words -------------------
+  //
+  // 概览目标 and 预期产出 are the agent's compression of the objective, and they are what makes
+  // the lazy full text safe: they are written against the same acceptance criteria the completion
+  // gate enforces, so a summary that drifts is checked by something other than itself.
+  const statement = []
+  const goalSummary = typeof delivery.goalSummary === 'string' ? delivery.goalSummary.trim() : ''
+  const expectedOutput = typeof delivery.expectedOutput === 'string' ? delivery.expectedOutput.trim() : ''
+  if (goalSummary !== '') statement.push(`概览目标：${goalSummary}`)
+  if (expectedOutput !== '') statement.push(`预期产出：${expectedOutput}`)
+
+  // FAIL-SAFE, and the answer to "what if it forgets the goal": the compact path may only fire
+  // when it actually says what the goal is. With neither field filled there is nothing here to
+  // orient on, so the original text comes back regardless of the trigger policy. Silence is the
+  // one failure mode this block must never have.
+  const full = meta.full === true || statement.length === 0
+  lines.push(...statement)
+  if (statement.length === 0) {
+    // Not `meta.full !== true`: the caller already forces the full text in this case, so a note
+    // gated on "the caller did not ask for it" is a branch that can never run. The test that
+    // caught this is the one asserting the note APPEARS — worth having, because the note is the
+    // only thing that tells the model the compact path is waiting on its own input.
+    lines.push('（概览目标与预期产出都还没写——没有这两条，这一块就没法说明要交付什么，所以直接给你目标原文。先把它们写上，之后每轮只会下发压缩态。）')
+  }
 
   if (summary.acceptance.total === 0) {
     lines.push('验收标准：还没有定义——没有它，「完成」无法判断。先定验收标准再动手。')
   } else {
+    // The LIST, not just the count. 14 criteria measured 559 characters and they are the
+    // operational definition of "done" — cheaper per useful token than anything else in here.
     lines.push(`验收标准：${summary.acceptance.verified}/${summary.acceptance.total} 已验证`)
+    for (const row of delivery.acceptance.slice(0, 14)) {
+      const mark = row.status === 'verified' ? '已验证' : row.status
+      const mandatory = row.mandatory === false ? '（非必须）' : ''
+      lines.push(`- ${row.id} ${clip(row.description, 90)}（${mark}）${mandatory}`)
+    }
+    if (delivery.acceptance.length > 14) lines.push(`（还有 ${delivery.acceptance.length - 14} 条）`)
   }
+
+  // Scope and constraints were NOT in this block before, which is the one thing the compaction
+  // actually made worse: §11 is "Agent 无法静默扩大 Objective / Scope", and the two fields that
+  // say what may not be done were the two fields the model never received.
+  const scope = delivery.scope ?? { included: [], excluded: [] }
+  if (scope.included.length > 0) lines.push(`范围（包含）：${bulletList(scope.included, 6)}`)
+  if (scope.excluded.length > 0) lines.push(`范围（不包含）：${bulletList(scope.excluded, 4)}`)
+  if (delivery.constraints.length > 0) lines.push(`已知约束：${bulletList(delivery.constraints, 6)}`)
+
+  lines.push(`阶段：${goal.phase}${goal.phase === 'active' ? `（续行${goal.activation === 'armed' ? '已启用' : '未启用'}）` : ''} · 修订 ${goal.revision} · 轮次 ${goal.roundsStarted}/${goal.maxGoalRounds}`)
   if (summary.tasks.total > 0) {
     lines.push(`任务：${summary.tasks.completed}/${summary.tasks.total} 已完成（进行中 ${summary.tasks.active}）`)
   }
@@ -569,8 +646,60 @@ export function renderPreflight(delivery, goal, meta = {}) {
   // about — and the model already has it.
   lines.push(`做完本轮的工作后用 ${DELIVERY_TOOL} 同步计划；证据必须来自真实跑过的东西。`)
   if (meta.artifactPath !== undefined) lines.push(`完整计划（需要时再读）：${meta.artifactPath}`)
+
+  if (full) {
+    // LAST, deliberately. The original is ~25,000 characters; putting it above the operative
+    // block would bury 验收标准 / 范围 / 下一步 under it, which is how the block got into the
+    // shape this option exists to correct.
+    lines.push(`目标原文（这一轮内联，共 ${goal.objective.length} 字）：${JSON.stringify(goal.objective)}`)
+  } else {
+    lines.push(`目标是压缩态。原文 ${goal.objective.length} 字未内联——需要核对原话时调 get_goal${meta.artifactPath === undefined ? '' : `，或读 ${meta.artifactPath} 的第 1 节`}。`)
+  }
   lines.push('</goal_state>')
   return lines.join('\n')
+}
+
+/** Truncate one line without ever leaving a dangling half-word feeling like the whole thing. */
+function clip(text, max) {
+  const value = String(text ?? '')
+  return value.length <= max ? value : `${value.slice(0, max - 1)}…`
+}
+
+/** Render a bounded inline list. Bounded because this block fires on every turn. */
+function bulletList(items, max) {
+  const shown = items.slice(0, max).map((item) => clip(item, 80))
+  if (items.length > max) shown.push(`…还有 ${items.length - max} 项`)
+  return shown.join('；')
+}
+
+/**
+ * Find the newest compaction checkpoint in a message array, or `null`.
+ *
+ * WHY THIS IS THE RIGHT SIGNAL. A compaction does not just trim the transcript — it REPLACES
+ * the compacted history with a checkpoint message, so the model's context genuinely loses what
+ * came before. That message is identifiable and DSH stamps it consistently: verified against a
+ * real 12.7 MB session transcript, which carried 8 of them, each with exactly
+ * `source = { kind: 'plugin', plugin: 'compact', compactionId: <uuid> }`.
+ *
+ * The id is returned rather than a boolean because the checkpoint PERSISTS: "a compaction
+ * happened" stays true for the rest of the session, and a caller that cannot tell one from the
+ * next would re-inline the full objective on every step.
+ *
+ * Best-effort by design. It only ever causes an EXTRA full injection, never a missing one, so a
+ * future DSH that renames this source costs the interval fallback and nothing else.
+ *
+ * @param {Array<{source?: object}>} messages
+ * @returns {string|null}
+ */
+export function compactionCheckpoint(messages) {
+  let id = null
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const source = message?.source
+    if (source?.kind === 'plugin' && source?.plugin === 'compact' && typeof source?.compactionId === 'string' && source.compactionId !== '') {
+      id = source.compactionId
+    }
+  }
+  return id
 }
 
 /**
@@ -1125,6 +1254,10 @@ export function installEnforcement(ctx, deps) {
       // 新的一轮一定下发目标（用户要的「每轮注入」）；一轮之内的重复仍然交给节流，否则一个长
       // 回合会把同一份计划重复塞十几次，那正是 §83 说的浪费。
       const goalDue = hasGoal && (newTurn || isInitial || changed || dueByInterval)
+      // 压缩检测放在这里而不是渲染函数里：它读的是消息数组，而渲染函数只该管排版。返回值是
+      // 最新的 checkpoint id —— 「发生过压缩」一旦为真就永远是它自己，所以消费的是一个**新**
+      // 的 id，不是「是否存在」（见 `compactionCheckpoint`）。
+      const compactionId = compactionCheckpoint(decision.messages)
       // 链该不该说：新一轮要说，本轮还没答（比如刚被门拦下）也要说。
       const chainDue = newTurn || entry.chainPending
 
@@ -1185,6 +1318,18 @@ export function installEnforcement(ctx, deps) {
         if (changed) stats.preflightOnChange += 1
 
         const artifact = deps.artifacts?.describe(sessionId) ?? undefined
+        // 全文什么时候回来 —— 四个触发点，见 options.preflightFullEvery。压缩事件在这里消费
+        // 并落 `lastCompactionId`：checkpoint 会留在消息里，不记 id 就会每一步都重新内联。
+        const compacted = compactionId !== null && compactionId !== entry.lastCompactionId
+        if (compacted) entry.lastCompactionId = compactionId
+        // 压缩态必须真的说清目标是什么，否则它不比没有好。两个字段都空 → 无条件内联原文，
+        // 这是「忘记目标」在本策略下不可达的那一道保险。
+        const statementEmpty =
+          String(delivery.goalSummary ?? '').trim() === '' && String(delivery.expectedOutput ?? '').trim() === ''
+        const fullDue =
+          isInitial || changed || compacted || statementEmpty ||
+          entry.preflights - entry.lastFullPreflight >= options.preflightFullEvery
+        if (fullDue) entry.lastFullPreflight = entry.preflights
         // A revision the model has not seen is the one case where "what changed" is worth the
         // bytes: the block already carries the revision, and saying WHY it is being repeated
         // stops the model from reading a second injection as noise.
@@ -1192,6 +1337,7 @@ export function installEnforcement(ctx, deps) {
           renderPreflight(delivery, resolved.goal, {
             artifactPath: artifact?.path,
             changedSinceLastInjection: changed,
+            full: fullDue,
           }),
         )
         if (summary !== '状态链') summary = changed ? '目标已更新' : '目标状态'

@@ -1583,6 +1583,112 @@ try {
 
     eq('but an unchanged revision does not repeat', ((await step(1, 5)).messages || []).length, 0)
   }
+
+  console.log('goal-enforce: the preflight is COMPACT, and the objective comes back on triggers')
+  {
+    // WHY THIS SECTION EXISTS. `renderPreflight` used to print `目标：${JSON.stringify(goal.objective)}`
+    // unconditionally. Measured on the live session: 25,604 characters, re-sent every user turn.
+    // Every assertion above still passed after that was written, because they only ever looked at
+    // the block's first line and its labels — so the block could be any size and stay "green".
+    // These four claims are the ones that were missing, and each one can fail on its own:
+    //
+    //   1. the compact form really is small, and it names what the goal IS;
+    //   2. the objective's原文 is absent from the routine turn;
+    //   3. it comes back on a revision change and after a detected compaction;
+    //   4. the compact form can never fire when it has nothing to say (the fail-safe).
+    const objective = `# 目标原文 ${'这一段很长，长到每轮重发就是在烧上下文。'.repeat(80)}`
+    const paths = freshPaths()
+    const sessionId = 'sess-compact'
+    let delivery = domain.emptyDelivery(sessionId)
+    delivery = domain.applyDeliveryOp(delivery, 'setGoalSummary', { goalSummary: '把目标中心做出来。' }, { at: 1 }).delivery
+    delivery = domain.applyDeliveryOp(delivery, 'setExpectedOutput', { expectedOutput: '一个能看的目标页。' }, { at: 1 }).delivery
+    store.writeDeliveryOverlay(paths, sessionId, delivery, 0)
+
+    let goal = { ...GOAL, objective, revision: 1 }
+    const ctx = fakeCtx({ goals: { get: () => goal } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const step = (turn, s, messages = []) => fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), messages, turn, step: s, signal: undefined },
+      () => Promise.resolve({ kind: 'enter', messages }), { kind: 'enter', messages })
+    // Read the notice by its MARKER, not by index 0: with a compaction checkpoint in the array
+    // the notice is spliced in AFTER the last claimed message, so it lands at index 1. Assuming
+    // index 0 read the checkpoint's own text and reported a product failure that was not one.
+    const textOf = (result) => (result.messages ?? [])
+      .map((m) => m?.content?.[0]?.text ?? '')
+      .find((t) => t.startsWith('<goal_state>')) ?? ''
+
+    const first = textOf(await step(1, 1))
+    check('the first orientation of a session DOES carry the objective原文',
+      first.includes('这一段很长，长到每轮重发就是在烧上下文'), first.slice(0, 200))
+    check('and it says how big that text is', /共 \d+ 字/.test(first), first.slice(-200))
+
+    // Turn two: the model has just been told the goal. This is the turn that used to cost 25 kB.
+    const second = textOf(await step(2, 1))
+    check('a later turn does NOT re-send the objective原文',
+      second !== '' && !second.includes('这一段很长，长到每轮重发就是在烧上下文'), second.slice(0, 200))
+    check('but it DOES say what the goal is', second.includes('概览目标：把目标中心做出来。'), second)
+    check('and what the turn is supposed to produce', second.includes('预期产出：一个能看的目标页。'), second)
+    check('and it points at where the original words live', second.includes('get_goal'), second.slice(-200))
+    check('and the block is an order of magnitude smaller than the原文',
+      second.length < objective.length / 5, `${second.length} vs ${objective.length}`)
+
+    // The two triggers that must not be lost by trimming. Without these the policy is just
+    // "never send it", which is the failure mode the user asked about by name.
+    goal = { ...goal, revision: 2 }
+    const onChange = textOf(await step(3, 1))
+    check('a revision change brings the原文 back',
+      onChange.includes('这一段很长，长到每轮重发就是在烧上下文'), onChange.slice(0, 200))
+
+    const checkpoint = { role: 'user', id: 'cp-1', content: '（压缩后的历史）', source: { kind: 'plugin', plugin: 'compact', compactionId: 'cp-abc' } }
+    const afterCompaction = textOf(await step(4, 1, [checkpoint]))
+    check('a detected context compaction brings the原文 back',
+      afterCompaction.includes('这一段很长，长到每轮重发就是在烧上下文'), afterCompaction.slice(0, 200))
+
+    // THE LATCH. The checkpoint stays in the transcript forever, so "a compaction happened" is
+    // true for the rest of the session — a detector that forgot WHICH one would re-inline the
+    // full objective on every remaining step, which is the bug this test exists to prevent.
+    const afterLatch = textOf(await step(5, 1, [checkpoint]))
+    check('but the SAME checkpoint does not fire it a second time',
+      afterLatch !== '' && !afterLatch.includes('这一段很长，长到每轮重发就是在烧上下文'), afterLatch.slice(0, 200))
+
+    // FAIL-SAFE. Nothing to say about the goal → the original comes back regardless of schedule.
+    // This is what makes "the agent forgot the goal" unreachable: the compact form may only fire
+    // when it actually states one.
+    const bareId = 'sess-compact-bare'
+    store.writeDeliveryOverlay(paths, bareId, domain.emptyDelivery(bareId), 0)
+    const bareGoal = { ...GOAL, objective, revision: 1 }
+    const bareCtx = fakeCtx({ goals: { get: () => bareGoal } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(bareCtx, { paths, options: {} })
+    const bareStep = (turn, s) => fire(bareCtx, 'agent/pre-step',
+      { agent: fakeAgent(bareId), turn, step: s, signal: undefined },
+      () => Promise.resolve({ kind: 'enter', messages: [] }), { kind: 'enter', messages: [] })
+    await bareStep(1, 1)
+    const bareSecond = (await bareStep(2, 1)).messages?.[0]?.content?.[0]?.text ?? ''
+    check('with 概览目标 and 预期产出 both empty, every turn still carries the原文',
+      bareSecond.includes('这一段很长，长到每轮重发就是在烧上下文'), bareSecond.slice(0, 200))
+    check('and it says WHY it is repeating itself', bareSecond.includes('都还没写'), bareSecond.slice(0, 200))
+  }
+
+  console.log('goal-enforce: compaction detection reads the checkpoint DSH actually writes')
+  {
+    // Shape verified against a real 12.7 MB session transcript, which carried 8 checkpoints,
+    // each with exactly `source = { kind:'plugin', plugin:'compact', compactionId:<uuid> }`.
+    eq('no checkpoint → null', enforce.compactionCheckpoint([{ role: 'user' }, { role: 'assistant' }]), null)
+    eq('a plugin message that is not compact → null',
+      enforce.compactionCheckpoint([{ source: { kind: 'plugin', plugin: 'dsh-luzzy-page' } }]), null)
+    eq('a compact source with no id → null',
+      enforce.compactionCheckpoint([{ source: { kind: 'plugin', plugin: 'compact' } }]), null)
+    eq('the real shape → the id',
+      enforce.compactionCheckpoint([{ source: { kind: 'plugin', plugin: 'compact', compactionId: 'x-1' } }]), 'x-1')
+    eq('the NEWEST one wins (they accumulate)',
+      enforce.compactionCheckpoint([
+        { source: { kind: 'plugin', plugin: 'compact', compactionId: 'old' } },
+        { source: { kind: 'plugin', plugin: 'compact', compactionId: 'new' } },
+      ]), 'new')
+    eq('a non-array is not a crash', enforce.compactionCheckpoint(undefined), null)
+  }
   console.log('goal-enforce: turn observation reports WHICH files changed')
   {
     // `files` exists for one caller: the skill-miss challenge has to show the model the concrete
