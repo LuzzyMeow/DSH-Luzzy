@@ -187,18 +187,6 @@
     // Every projection carries `tab`, which is what the router dispatches on. Keeping the tab id
     // INSIDE the projection is what makes it impossible to hand a page another page's data —
     // they travel as one value, so they cannot disagree.
-    if (tab === 'overview') {
-      return {
-        tab: tab,
-        status: state.goalStatus,
-        elapsed: state.goalStatus === 'loading' ? state.elapsed : undefined,
-        goal: state.goal === null ? null : {
-          status: state.goalStatus,
-          view: LZ.GoalService.toView(state.goal),
-          detail: state.goalDetail,
-        },
-      }
-    }
     if (tab === 'goal') {
       return {
         tab: tab,
@@ -206,23 +194,17 @@
         elapsed: state.goalStatus === 'loading' ? state.elapsed : undefined,
         detail: state.goalDetail,
         view: state.goal === null ? null : LZ.GoalService.toView(state.goal),
-      }
-    }
-    if (tab === 'runtime') {
-      return {
-        tab: tab,
-        status: state.runtimeStatus,
-        elapsed: state.runtimeStatus === 'loading' ? state.elapsed : undefined,
-        view: state.runtime === null ? null : LZ.RuntimeService.toView(state.runtime),
-      }
-    }
-    if (tab === 'agent') {
-      return {
-        tab: tab,
-        status: state.presetStatus === 'loading' ? 'loading' : state.presetStatus,
-        elapsed: state.presetStatus === 'loading' ? state.elapsed : undefined,
-        detail: state.presetDetail,
-        view: state.preset === null ? null : LZ.AgentService.toView(
+        // 执行状态与 Agent 配置折进目标中心之后，这一页需要三份数据。
+        //
+        // 三份各有自己的 status，因为它们**失败是独立的**：目标读到了、执行状态没读到，
+        // 是完全正常的一种组合；用一个总 status 表示，会让「执行状态读不到」显示成
+        // 「目标读不到」——那是对用户的数据说了一句不真的话。
+        runtimeStatus: state.runtimeStatus,
+        runtimeDetail: state.runtimeDetail,
+        runtimeView: state.runtime === null ? null : LZ.RuntimeService.toView(state.runtime),
+        presetStatus: state.presetStatus,
+        presetDetail: state.presetDetail,
+        presetView: state.preset === null ? null : LZ.AgentService.toView(
           state.preset,
           state.runtime === null ? null : LZ.RuntimeService.toView(state.runtime),
           state.goal === null ? null : LZ.GoalService.toView(state.goal),
@@ -488,9 +470,9 @@
 
   /** 某一页需要哪些数据。切页时按需取，不一次全取——那是四次 220 MB 扫描。 */
   function ensureFor(tab) {
-    if (tab === 'overview' || tab === 'goal') return loadGoal(false)
-    if (tab === 'runtime') return Promise.all([loadRuntime(false), loadGoal(false)])
-    if (tab === 'agent') return Promise.all([loadPreset(false), loadRuntime(false), loadGoal(false)])
+    // 目标中心现在承载三块内容（目标 / 执行状态 / Agent 配置），所以三份数据都要。
+    // 这不是「一次全取」：另外两页（系统信息 / 预设）仍然各取各的，没有被牵连。
+    if (tab === 'goal') return Promise.all([loadGoal(false), loadRuntime(false), loadPreset(false)])
     if (tab === 'system') return Promise.all([loadGoal(false), loadRuntime(false), loadUsage(false)])
     if (tab === 'readme') return loadReadme(false)
     // The preset editor owns its own state and its own loader; asking it to ensure its data is
@@ -530,9 +512,7 @@
     if (refreshTimer !== null) return
     refreshTimer = setInterval(function () {
       if (!shouldRefresh()) return
-      if (state.tab === 'overview' || state.tab === 'goal') loadGoal(true)
-      else if (state.tab === 'runtime') { loadRuntime(true); loadGoal(true) }
-      else if (state.tab === 'agent') { loadRuntime(true); loadPreset(true); loadGoal(true) }
+      if (state.tab === 'goal') { loadGoal(true); loadRuntime(true); loadPreset(true) }
       else if (state.tab === 'system') { loadRuntime(true); loadGoal(true) }
     }, 15000)
   }
@@ -559,7 +539,7 @@
     }
 
     document.addEventListener('click', function (event) {
-      const node = event.target.closest('[data-action], [data-viewer], [data-tab]:not([role="tab"]), [data-window], [data-mode], [data-goalsection], [data-proposal], #goalArtifactOn, #goalArtifactOff, #goalArtifactWrite, #goalReconcile, #goalRawToggle, #goalRefresh, #goalRetry, #overviewRefresh, #overviewRetry, #runtimeRetry, #agentRetry, #agentGotoPreset, #systemRetry')
+      const node = event.target.closest('[data-action], [data-viewer], [data-tab]:not([role="tab"]), [data-window], [data-mode], [data-goalsection], [data-proposal], #goalArtifactOn, #goalArtifactOff, #goalArtifactWrite, #goalReconcile, #goalRawToggle, #goalRefresh, #goalRetry, #runtimeRetry, #agentRetry, #agentGotoPreset, #systemRetry')
       if (node === null) return
 
       // 图表控件：只影响趋势图，纯前端，不发请求。
@@ -596,10 +576,11 @@
       switch (node.id) {
         case 'goalRefresh': loadGoal(true); return
         case 'goalRetry': loadGoal(true); return
-        case 'overviewRefresh': loadGoal(true); return
-        case 'overviewRetry': loadGoal(true); return
-        case 'runtimeRetry': loadRuntime(true); return
-        case 'agentRetry': Promise.all([loadPreset(true), loadRuntime(true)]); return
+        // 执行状态与 Agent 配置折进目标中心之后，它们的重试按钮落在这里。
+        // 两个都同时重取目标：Agent 配置的「工具能力」一块来自执行状态，
+        // 而目标的读数会跟着刷新——只重取一半会让页面上两块内容来自两个时刻。
+        case 'runtimeRetry': Promise.all([loadRuntime(true), loadGoal(true)]); return
+        case 'agentRetry': Promise.all([loadPreset(true), loadRuntime(true), loadGoal(true)]); return
         case 'systemRetry': Promise.all([loadUsage(true), loadRuntime(true)]); return
         case 'agentGotoPreset': switchTab('preset'); return
         case 'agentNewSession': createSession(); return
@@ -870,7 +851,8 @@
       wire()
       render()
       askForSession()
-      // 首屏就把总览要的数据取了——那是用户第一眼要看的。
+      // 首屏就把当前页要的数据取了。默认页是目标中心，它要三份（目标 / 执行状态 / Agent 配置）——
+      // 这不是「一次全取」：系统信息与预设各有自己的取数，没有被牵连。
       ensureFor(state.tab)
       scheduleRefresh()
     },

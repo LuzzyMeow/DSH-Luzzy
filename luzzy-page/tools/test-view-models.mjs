@@ -130,7 +130,9 @@ const RAW_ONLY = [
   'LZ.App.state',     // the shell's mutable state — pages get a projection, not the state
   'goalPayload',      // the pre-transform object the shell holds
 ]
-const PAGE_FILES = ['overview', 'goal', 'runtime', 'agent', 'system', 'readme']
+// 「总览」页已删除，所以它不再在这张表里。执行状态与 Agent 配置两个模块仍在——它们不再是
+// 独立页签，但仍是独立的**渲染模块**（目标中心按分区调它们的 render），所以边界照样要守。
+const PAGE_FILES = ['goal', 'runtime', 'agent', 'system', 'readme']
 for (const page of PAGE_FILES) {
   const text = readFileSync(join(PLUGIN_ROOT, 'src', 'pages', `${page}.js`), 'utf8')
   // Strip comments: the pages' own headers explain the boundary and quote the old field names.

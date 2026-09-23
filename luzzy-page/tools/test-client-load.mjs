@@ -472,8 +472,12 @@ if (entry) {
   // what went missing — the assertion would have to be edited either way and would not
   // notice a tab being REPLACED by another one. The set catches both.
   //
-  // v2 renamed the tabs and added two: the console's five pages, plus the preset editor
-  // (kept as its own entry) and the README as a secondary one.
+  // 本轮变了三件事，三条都钉在这里：
+  //   · 「总览」删掉了（它回答的五个问题目标中心逐条都在），所以它不在表里了；
+  //   · 「执行状态」与「Agent 配置」不再是独立页签，折成目标中心的两个分区；
+  //   · 默认页从 overview 改成 goal。
+  // 后一条是**独立**的一条：删掉一个页签而不改默认值，落在它上面的会话会看到一个
+  // 回退到别的页的界面，而用户以为自己还在那一页。
   {
     // Scoped to the ROUTER's tab table. A bare `id: '...', label:` also matches every
     // markdown-toolbar button (id: 'bold', label: '加粗'), which reported 26 "tabs".
@@ -482,21 +486,100 @@ if (entry) {
       .map((s) => s.slice(5, s.indexOf("', label")))
       .sort()
     check(
-      'the tab bar offers exactly the known tabs',
-      tabs.join(',') === 'agent,goal,overview,preset,readme,runtime,system',
+      'the nav offers exactly the known pages',
+      tabs.join(',') === 'goal,preset,readme,system',
       tabs.join(','),
     )
     check(
-      'every tab renders a page module',
+      'every nav entry renders a page module',
       tabs.every((tab) => new RegExp(`LZ\\.[A-Za-z]+Page\\.render`).test(routerTable)),
       tabs.join(','),
     )
+    // 默认页必须是目标中心 —— 用户明确要求「默认跳转目标中心」。
+    check('the default page is the goal centre', /const DEFAULT_TAB = 'goal'/.test(source))
+    // 总览页必须真的不存在了，而不是「还在但不显示」。
+    // 留着它的渲染模块等于留着第二套同义排版，而那正是删掉它的理由。
+    check('the overview page is gone, not merely unlinked',
+      !source.includes('LZ.OverviewPage') && !source.includes('function goalCard('),
+      '总览页的渲染模块还在')
   }
   check('the preset tab exists', source.includes("id: 'preset'"))
   check('the frame renders the preset page', source.includes('function renderPreset()'))
   check('the preset editor is reachable from the router', source.includes('LZ.PresetPage.render'))
   check('the frame reads the preset route', source.includes("'/__luzzy/preset'") || source.includes('/__luzzy/preset'))
   check('the frame posts mutations', source.includes("method: 'POST'"))
+
+  // ---- 执行状态与 Agent 配置折进目标中心
+  //
+  // 这两条钉的是**「调」而不是「抄」**。抄一份渲染器是这次整合里最诱人的做法：它让折叠看起来
+  // 完成了，同时造出第二份会漂移的排版 —— 而被抄的那份才是有人维护的那份。所以断言钉在
+  // 「目标中心按名字调用另外两个模块的 render」，不是「目标中心里有一套长得像的卡片」。
+  check('the goal centre calls the runtime renderer rather than copying it',
+    /LZ\.RuntimePage\.render\(/.test(source))
+  check('and the agent renderer likewise',
+    /LZ\.AgentPage\.render\(/.test(source))
+  // 而那两个模块本身必须还在：折叠是「换入口」，不是「删内容」。
+  check('and both modules still exist as modules',
+    source.includes('LZ.RuntimePage = { render: render }') && source.includes('LZ.AgentPage = { render: render }'))
+  // 六个分区必须都在表里 —— 少一个，那一块内容就成了永远打不开的死代码。
+  {
+    const sections = [...source.matchAll(/\['(\w+)', '(概览|计划|证据|记录|执行|Agent)'\]/g)].map((m) => m[1])
+    check('all six goal sections are declared', sections.length === 6, sections.join(','))
+    check('and the two folded ones are among them',
+      sections.includes('execution') && sections.includes('agent'), sections.join(','))
+  }
+  // 三份数据各自有 status：用一个总状态会让「执行状态读不到」显示成「目标读不到」——
+  // 那是对用户的数据说了一句不真的话。
+  check('the goal projection keeps the three data states separate',
+    source.includes('runtimeStatus:') && source.includes('presetStatus:') && source.includes('runtimeView:'))
+
+  // ---- 玻璃材质层
+  //
+  // 视觉的东西大部分只能靠眼睛，但**这三条是结构性的**，所以能断言、也就必须断言。
+  {
+    const css = readFileSync(join(PLUGIN_ROOT, 'src', 'styles', 'components.css'), 'utf8')
+    const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, '')
+
+    // ① 减少透明度：系统级「别给我半透明」。玻璃界面不认它就是没做无障碍，而这条设置
+    //    恰恰是最可能提这个需求的人开着的。
+    //
+    //    判定写成**带括号的媒体查询**而不是子串匹配：`includes('prefers-reduced-transparency')`
+    //    对 `...-transparency: no-preference` 也是真 —— 反证臂 D 就是靠这一点抓出这条断言
+    //    当时是假的。值也必须真的是 `reduce`。
+    check('the glass honours prefers-reduced-transparency',
+      /@media\s*\(prefers-reduced-transparency:\s*reduce\)/.test(cssRules))
+    // 而且那一支必须真的**关掉 blur**：只提高不透明度的话，模糊还在，而模糊才是把背景
+    // 揉进文字的那一步。
+    check('and that branch actually removes the blur',
+      /prefers-reduced-transparency:\s*reduce\)[\s\S]{0,600}?backdrop-filter:\s*none/.test(cssRules))
+    // ② 更高对比：只提高不透明度不够 —— 玻璃的边界本来就靠一条 6% 的发丝线撑着，
+    //    对低视力用户它必须真的看得见，所以这一支要把描边换成实色。
+    check('and prefers-contrast gets a real border, not just more opacity',
+      /prefers-contrast:\s*more[\s\S]{0,400}?border-color:\s*var\(--lz-border\)/.test(cssRules))
+    // ③ 不叠两层玻璃。callout / focusBox 在卡片**内部**，它们自己再 blur 一次就等于
+    //    正文压在两层模糊底下 —— 每层都吃掉一点对比度。「一块表面只能有一层。」
+    //
+    // 三个样式表都要读：玻璃的四层**故意**分布在 layout.css（侧边栏、画布）与
+    // components.css（卡片、浮层、通知条）里，各归各的布局层次管。只读一份会漏掉两处，
+    // 而漏掉的那种失败方式正好是这条断言要防的（「改了卡片忘了侧栏」）。我第一版只读了
+    // components.css，于是它报「只有两层」—— 断言对，读的范围错了。
+    const sheets = ['layout.css', 'components.css', 'tokens.css']
+      .map((f) => readFileSync(join(PLUGIN_ROOT, 'src', 'styles', f), 'utf8'))
+      .join('\n')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+    const blurOwners = [...sheets.matchAll(/([^{}]+)\{[^}]*backdrop-filter:/g)]
+      .map((m) => m[1].trim().split(/[\s,]+/).filter((s) => s.startsWith('.')))
+      .flat()
+    const nested = blurOwners.filter((sel) => /callout|focusBox|proposal|badge|row\b/.test(sel))
+    check('no surface nested inside a card grows its own blur', nested.length === 0, nested.join(', '))
+    const tiers = [...new Set(blurOwners)]
+    check('and the surface tiers that carry it are the outer ones',
+      tiers.length >= 4 && tiers.length <= 8, tiers.join(', '))
+    // backdrop-filter 不被支持时卡片必须退回实底 —— 否则它只是一块半透明的壳，
+    // 文字压在画布色晕上，对比度掉到读不清，而且不报错。
+    check('and there is a fallback for engines without backdrop-filter',
+      cssRules.includes('@supports not') && /@supports not[\s\S]{0,300}?\.card\s*\{\s*background:\s*var\(--lz-bg-container\)/.test(cssRules))
+  }
 
   // ---- 目标中心
   //
@@ -533,34 +616,16 @@ if (entry) {
   //
   // ① 顶部并排两个一模一样的「已完成」胶囊 ② 目标正文被压成一大坨。
   // 两条都是**用错原语**，所以断言钉在结构上，不钉在外观上。
+  //
+  // 本轮这两条**换了守卫对象**，因为承载它们的那一页（总览）被删了：
+  //
+  //   ① 去重的那段代码随总览页一起消失 —— 不是「不守了」，是那个缺陷的载体不存在了。
+  //      现在守住这一点的是「总览页真的没了」（见上面 nav 那一段）。
+  //   ② 「目标正文被压成一坨」的成因是 objectiveText 把原始目标正文塞进 .focusBox。
+  //      现在**没有任何页面再把原始目标正文铺进卡片**：完整目标只在「完整计划」视窗里，
+  //      卡片抬头那一格是 Agent 写的「概览目标」。所以守卫从「那个函数怎么写」改成
+  //      「那一格不能顶替」——后者才是这条规则真正的意思。
   {
-    const overview = readFileSync(join(TOOLS_ROOT, 'src', 'pages', 'overview.js'), 'utf8')
-
-    // ① 健康度与阶段同档时不画 —— 同一个词说两遍只增加噪音，还让人去找两者的区别。
-    check('the overview suppresses a redundant health badge',
-      overview.includes('toneOf(view.health) === LZ.StatusBadge.toneOf(goal.phase)'),
-      '两个徽标又并排了')
-    // 但不同档时必须仍然画出来，否则就是删掉了它而不是去重。
-    check('but still renders it when the tone differs',
-      /:\s*LZ\.StatusBadge\.fromStatus\(view\.health\)/.test(overview))
-
-    // ② 目标正文走查看器，不再在页面里展开。
-    check('the overview uses the shared objective renderer', overview.includes('objectiveText(goal.objective)'))
-    // 目标页**不再**把目标正文铺进卡片：最上面换成 Agent 写的一段「概览目标」。正文一个字都没删
-    // —— 完整的那份在「完整计划」视窗的第 1 节（`renderGoalMarkdown` 原样输出 runtimeGoal.objective，
-    // 见 `luzzy-page/lib/goal-domain.mjs` 的 `## 1. 预期目标`）。
-    //
-    // 断言钉的是**这个分工**，不是「那一行还在不在」：上一版钉的是那一行，于是分工一换它就报假失败。
-    check('and the goal centre hands the full objective off to the plan viewer instead of spreading it in the card',
-      !source.includes('LZ.Format.objectiveText(') && source.includes('goalSummaryBlock(view)'))
-    // 而顶上那一段是 Agent 自己的字段、**按 Markdown 渲染**，不是把目标正文顶上去充数。
-    check('and the summary block renders the Agent\'s own field as Markdown',
-      /function goalSummaryBlock\(view\)[\s\S]*?LZ\.Markdown\.render\(text\)/.test(source))
-    // 空着就照实说没写。拿目标正文顶替会让页面看起来已经答过了，于是没有人会回来写它 ——
-    // 预期产出踩过同一个坑，所以两格写的是同一句话。
-    check('and an unwritten summary says so instead of borrowing the objective',
-      source.includes('还没有写。这一格要一段话 —— 这个目标在做什么。'))
-
     const format = readFileSync(join(PLUGIN_ROOT, 'src', 'components', 'Format.js'), 'utf8')
     check('the renderer lives in the shared Format module', format.includes('function objectiveText('))
     // 长正文**不在页面里展开**：展开＝页面里再套一层滚动框，两层滚动就是用户说的「断层」
@@ -578,6 +643,20 @@ if (entry) {
       source.includes('function openViewer(') && source.includes('openViewer: openViewer'))
     check('and the click reaches it through the delegated handler',
       source.includes('node.dataset.viewer !== undefined'))
+
+    // ② 真正的规则：目标正文**不铺进任何卡片**。顶上那一格是 Agent 自己的字段、按 Markdown
+    // 渲染，不是把目标正文顶上去充数。
+    check('no page spreads the raw objective into a card',
+      !source.includes('LZ.Format.objectiveText('),
+      '又有页面把目标正文铺进卡片了')
+    check('and the goal centre hands the full objective off to the plan viewer instead',
+      source.includes('goalSummaryBlock(view)'))
+    check('and the summary block renders the Agent\'s own field as Markdown',
+      /function goalSummaryBlock\(view\)[\s\S]*?LZ\.Markdown\.render\(text\)/.test(source))
+    // 空着就照实说没写。拿目标正文顶替会让页面看起来已经答过了，于是没有人会回来写它 ——
+    // 预期产出踩过同一个坑，所以两格写的是同一句话。
+    check('and an unwritten summary says so instead of borrowing the objective',
+      source.includes('还没有写。这一格要一段话 —— 这个目标在做什么。'))
 
     const css = readFileSync(join(PLUGIN_ROOT, 'src', 'styles', 'components.css'), 'utf8')
     // pre-wrap 是这条修复的核心：折叠了空白，几百行就糊成一坨。

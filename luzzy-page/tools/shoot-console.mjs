@@ -54,11 +54,11 @@ if (!compile.ok) {
 
 const hostPath = writeHostPage(frameWithStub(THEME), { width: WIDTH, height: HEIGHT, theme: THEME, label: 'console' })
 
+// 「总览」页已删除（它回答的五个问题目标中心逐条都在），默认页改成目标中心。
+// 「执行状态」与「Agent 配置」不再是独立页签 —— 它们成了目标中心的两个分区，
+// 截图时按 `--only` 传 goal 并点分区即可，不再是两个独立的页面条目。
 const PAGES = [
-  { id: 'overview', label: '总览' },
   { id: 'goal', label: '目标中心' },
-  { id: 'runtime', label: '执行状态' },
-  { id: 'agent', label: 'Agent 配置' },
   { id: 'system', label: '系统信息' },
   { id: 'preset', label: '预设' },
   { id: 'readme', label: '插件说明' },
@@ -121,6 +121,37 @@ try {
           badges: content.querySelectorAll('.badge').length,
           timelineItems: content.querySelectorAll('.timelineItem').length,
           treeBranches: content.querySelectorAll('details.treeBranch').length,
+          // The sidebar. Read on EVERY page, because the failure this catches is a nav item that
+          // renders as a label with no icon: the screenshot shows a gap, and a gap has three
+          // possible causes (no element / zero size / invisible colour) that need different
+          // fixes. Measuring all three at once turns "it looks wrong" into a named cause.
+          nav: [...doc.querySelectorAll('.navItem')].map((item) => {
+            const svg = item.querySelector('.navIcon');
+            const box = svg ? svg.getBoundingClientRect() : null;
+            const cs = svg ? doc.defaultView.getComputedStyle(svg) : null;
+            return {
+              tab: item.dataset.tab,
+              hasSvg: svg !== null,
+              innerLen: svg ? svg.innerHTML.length : -1,
+              w: box ? Math.round(box.width) : -1,
+              h: box ? Math.round(box.height) : -1,
+              stroke: cs ? cs.stroke : '(none)',
+              current: item.getAttribute('aria-current'),
+            };
+          }),
+          // Everything the sidebar actually contains. A screenshot showed a faint mark below the
+          // last nav item and I could not tell whether it was an element, a scrollbar, or a
+          // rendering artefact. Listing the children answers that; guessing does not.
+          //
+          // Built with CONCATENATION, not a nested template literal: this whole probe is itself a
+          // template string, so a backtick in here would end it early and the module would fail to
+          // compile with an error pointing at some unrelated line. Same trap as §5.6/§5.9, now in
+          // a tool rather than the frame.
+          railChildren: [...(doc.querySelector('.rail') ? doc.querySelector('.rail').children : [])].map((el) => {
+            const r = el.getBoundingClientRect();
+            return el.tagName.toLowerCase() + '.' + (el.className || '(none)') + ' ' +
+              Math.round(r.width) + 'x' + Math.round(r.height);
+          }),
         };
       })`)
       if (probe.error === undefined && probe.contentChildren > 0) break
@@ -161,6 +192,17 @@ for (const row of results) {
   )
   console.log(`      heading: ${JSON.stringify(row.heading)}`)
   console.log(`      ${String(row.text).replace(/\s+/g, ' ').slice(0, 120)}`)
+  // The sidebar, measured. A nav item whose icon is missing, zero-sized, or painted in the
+  // background colour all look the same in a screenshot; these three numbers tell them apart.
+  for (const item of row.nav || []) {
+    const broken = !item.hasSvg || item.innerLen === 0 || item.w === 0 || item.h === 0
+    if (broken) failed += 1
+    console.log(
+      `      nav ${broken ? 'FAIL' : 'ok  '} ${String(item.tab).padEnd(9)} svg=${item.hasSvg} ` +
+      `paths=${item.innerLen} box=${item.w}x${item.h} stroke=${item.stroke}${item.current === 'page' ? ' [current]' : ''}`,
+    )
+  }
+  console.log(`      rail: ${(row.railChildren || []).join(' | ')}`)
   if (row.failure !== '') {
     console.log(`      RENDER ERROR:\n        ${String(row.failure).split('\n').slice(0, 8).join('\n        ')}`)
   }

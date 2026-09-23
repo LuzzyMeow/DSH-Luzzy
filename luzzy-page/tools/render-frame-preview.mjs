@@ -47,7 +47,8 @@ const checks = [
   ['app boots', html.includes('LZ.App.start()')],
 ]
 
-for (const page of ['OverviewPage', 'GoalPage', 'RuntimePage', 'AgentPage', 'SystemPage', 'ReadmePage', 'PresetPage']) {
+// 「总览」页已删除（它回答的五个问题目标中心逐条都在），所以这里不再有 OverviewPage。
+for (const page of ['GoalPage', 'RuntimePage', 'AgentPage', 'SystemPage', 'ReadmePage', 'PresetPage']) {
   checks.push([`page ${page} assembled`, html.includes(`LZ.${page} = `)])
 }
 for (const component of ['Card', 'StatusBadge', 'Progress', 'Timeline', 'TreeView', 'EmptyState', 'Markdown', 'Chart', 'Format']) {

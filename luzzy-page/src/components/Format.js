@@ -59,6 +59,15 @@ function levelOf(v, max) {
    * （滚轮滚谁看指针在哪，内容底部还会被外层容器切断）。所以这里只出一个按钮，点开走
    * `LZ.App.openViewer`：脱离页面流、占一屏、内部只有一层滚动。
    *
+   * **已退役（本轮）**：目标正文不再在任何卡片里露面，所以这个渲染器连同它那个按钮一起删了。
+   * 它的唯一调用者是「总览」页，而总览页已被删除（它回答的五个问题目标中心逐条都在）。
+   * 完整目标一个字都没丢 —— 它在「完整计划」视窗的第 1 节里（`renderGoalMarkdown` 原样输出
+   * `runtimeGoal.objective`）。卡片抬头那一格现在放的是 Agent 写的「概览目标」。
+   *
+   * 因此**「长正文被压成一坨」这个缺陷类已经结构性消失了**：没有任何页面再把原始目标正文
+   * 放进 `.focusBox`。守卫这一点的反证臂（`prove-overview-render.mjs` 的 A / B / C 三条）
+   * 也随主体一起退役，换成了 `prove-console-shell.mjs` 守着新的结构。
+   *
    * @param {string} objective
    * @returns {string}
    */

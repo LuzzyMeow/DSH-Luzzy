@@ -22,12 +22,26 @@
   const esc = LZ.Card.esc
   const badge = LZ.StatusBadge.badge
 
-  /** 目标中心的四个分区。顺序即阅读顺序：现在怎么样 → 要做什么 → 凭什么 → 一路上变过什么。 */
+  /**
+   * 目标中心的六个分区。顺序即阅读顺序：现在怎么样 → 要做什么 → 凭什么 → 一路上变过什么 →
+   * 谁在做 → 怎么做的。
+   *
+   * 「执行」与「Agent」两个分区是**执行状态页与 Agent 配置页折进来的**。它们原本是两个独立
+   * 页签，内容原样搬过来（同一批渲染函数，没有重写）——删掉的只是入口，不是内容：
+   *
+   *   执行   当前第几轮、生命周期走到哪、调用了哪些工具、上下文装了什么
+   *   Agent  这个 Agent 是谁、行为策略、工具能力、上下文策略、名单
+   *
+   * 为什么排在这四段之后而不是前面：前四段回答的是**这一个目标**的问题，它们才是这一页的
+   * 主场；执行与 Agent 回答的是**谁在做、怎么做的**，是支撑性的，放在后面。
+   */
   const GOAL_SECTIONS = [
     ['overview', '概览'],
     ['plan', '计划'],
     ['evidence', '证据'],
     ['record', '记录'],
+    ['execution', '执行'],
+    ['agent', 'Agent'],
   ]
 
   /* ---------------------------------------------------------------- 预期产出 */
@@ -662,6 +676,40 @@
     })
   }
 
+  /* ---------------------------------------------------------------- 折进来的两页 */
+
+  /**
+   * 执行状态：当前轮次、生命周期、工具调用、上下文。
+   *
+   * **渲染函数是从 `pages/runtime.js` 原样调的**，不是抄了一份。这一条是这次整合里最要紧的
+   * 决定：抄一份意味着两处排版要各自维护，而它们迟早会漂成两个样子；调同一个函数则
+   * 「删掉入口」与「内容还在」是同一份代码保证的。
+   *
+   * 状态与失败**各自分开**：执行状态读不到时只说执行状态读不到，上面那几张目标卡片照常显示。
+   * 用一个总状态表示会让「日志读不出来」显示成「目标读不出来」——那是对用户数据的错误陈述。
+   */
+  function executionSection(state) {
+    return LZ.RuntimePage.render({
+      tab: 'runtime',
+      status: state.runtimeStatus,
+      elapsed: state.runtimeStatus === 'loading' ? state.elapsed : undefined,
+      detail: state.runtimeDetail,
+      view: state.runtimeView,
+    })
+  }
+
+  /** Agent 配置：身份、行为策略、工具能力、上下文策略、名单。同上，调原函数。 */
+  function agentSection(state) {
+    return LZ.AgentPage.render({
+      tab: 'agent',
+      // 这一页的加载态跟随 preset：名单与提示词来自预设存储。
+      status: state.presetStatus === 'loading' ? 'loading' : state.presetStatus,
+      elapsed: state.presetStatus === 'loading' ? state.elapsed : undefined,
+      detail: state.presetDetail,
+      view: state.presetView,
+    })
+  }
+
   /* ---------------------------------------------------------------- 组装 */
 
   /**
@@ -736,10 +784,18 @@
         artifactBlock(view),
         rawBlock(view),
       ],
+      // 折进来的两页。它们吃的是**同一份投影**（state），不是 view——目标中心的 view 是
+      // 目标的视图模型，而执行状态与 Agent 配置各有自己的视图模型。硬把它们塞进一个 view
+      // 会让三个领域的状态混成一个形状，那正是 services/ 分层要避免的。
+      execution: [executionSection(state)],
+      agent: [agentSection(state)],
     }
 
     // 分区条。复用按钮组，不新造控件 —— 一个页面里出现第二种「切换」的视觉语言，
     // 读的人就得先学会两套规则。
+    //
+    // 六个分区用胶囊条仍然放得下（窄屏会折行，见 .btnBar 的 flex-wrap），所以这次没有
+    // 为了多两格去换控件。
     const nav = LZ.Card.btnBar(GOAL_SECTIONS.map(function (pair) {
       return {
         label: pair[1],

@@ -43,8 +43,18 @@
   --dsw-alias-state-error-primary: #ec1313;
   --dsw-alias-state-business-primary: #4176e6;
 
-  /* ---- 第 2 层：页面基础 ---- */
-  --lz-bg-layout: #ffffff;
+  /* ---- 第 2 层：页面基础 ----
+   *
+   * 画布**不是**白的，卡片才是白的。这一条是玻璃能不能看见的全部原因：
+   * `reference/lobehub/DESIGN.md` 定的是 `colorBgLayout: #f8f8f8`（画布）配
+   * `colorBgContainer: #ffffff`（卡片）—— 两级底色，层级先靠它做出来。
+   *
+   * 这里曾经两级都是 `#ffffff`。后果不是「不够好看」，是**整块玻璃变成不存在**：
+   * 半透明白叠在纯白上就是白，`backdrop-filter` 背后没有任何可模糊的差别，
+   * 卡片和实心卡片在屏幕上完全一样。我第一版截图里看到的正是这个 ——
+   * 卡片是平的，玻璃只是写了 CSS 而没发生。对齐回参考值之后，
+   * 卡片才真的比画布亮一档，「它是一块盖在画布上的玻璃」才成立。 */
+  --lz-bg-layout: #f8f8f8;
   --lz-bg-container: #ffffff;
   --lz-bg-container-secondary: #fbfbfb;
   --lz-bg-elevated: #ffffff;
@@ -130,6 +140,64 @@
   --lz-shadow-popover: 0 8px 16px -4px rgba(0, 0, 0, 0.2);
   --lz-shadow-modal: 0 20px 20px -8px rgba(0, 0, 0, 0.24);
 
+  /* 玻璃卡片的投影：**两层**，不是一层。
+   *
+   * 这是 Vercel 指南里那条 Layered shadows：「Mimic ambient + direct light with at least
+   * two layers」——单层柔和阴影不算数。第一层紧贴边缘（直射光，收紧轮廓），第二层散得开
+   * （环境光，给浮起来的感觉）。最前面那条内高光是液态玻璃的上缘，它给的是厚度。
+   *
+   * 为什么要在这里写清楚：Anthropic 那份把「每张卡片底下同一层 rgba(0,0,0,.1)」点名为
+   * AI 生成设计的识别特征之一。所以这一条不只是「好看一点」，它是避坑项。 */
+  --lz-shadow-glass:
+    inset 0 1px 0 var(--lz-glass-highlight),
+    0 1px 2px rgba(16, 24, 40, 0.04),
+    0 10px 28px -8px rgba(16, 24, 40, 0.1);
+
+  /* ---- 玻璃质感（液态玻璃 / 毛玻璃）
+   *
+   * 这是**表面**的性质，不是内容的：卡片、浮层、侧边栏共用同一套，所以它必须是 token。
+   * 在各处写 backdrop-filter 字面量会让三者慢慢漂成三种玻璃，而「一页一种玻璃」看起来
+   * 就是没做完。
+   *
+   * 三个值各自有理由，别单独调其中一个：
+   *   blur 20px      再厚就看不见背后有什么了 —— 「毛玻璃」变成「模糊的实色块」
+   *   saturate 1.4   液态玻璃不只是模糊，它让背后的颜色更透出来
+   *   alpha          正文对比度全靠它守住。**这一项没有外部依据可抄** —— 读遍 shadcn /
+   *                  Vercel / Anthropic 三家，只有 Vercel 讲了 backdrop-filter 元素在视图
+   *                  过渡里的技术处理，没有任何一家给出「半透明表面上的文字对比度」验收
+   *                  标准。所以这个值是按本仓实测定的（tools/test-glass-contrast.mjs 在
+   *                  最坏的叠底下算实际对比度），不是抄来的。
+   *  ---- */
+  --lz-glass-blur: 20px;
+  --lz-glass-saturate: 1.4;
+  --lz-glass-card: rgba(255, 255, 255, 0.72);
+  --lz-glass-elevated: rgba(255, 255, 255, 0.86);
+  --lz-glass-sidebar: rgba(255, 255, 255, 0.62);
+  /* 液态玻璃的边缘是**两条**线，不是一条描边：亮的那条给它厚度（Apple 的内高光），
+   * 暗的那条把相邻两块玻璃分开。Vercel 的指南同向：边框与阴影要同时用，
+   * 半透明边框提升边缘清晰度。 */
+  --lz-glass-highlight: rgba(255, 255, 255, 0.7);
+  --lz-glass-hairline: rgba(0, 0, 0, 0.06);
+
+  /* 模糊要有东西可模糊。均匀底色上的毛玻璃看起来只是「有点脏的白」——模糊没有产生任何
+   * 可见差别，因为背后本来就没有层次。所以画布底下垫两层极淡的色晕，它存在的唯一理由
+   * 就是给玻璃提供可透的内容。
+   *
+   * **两处都必须落在强调色的色相里**，而且**绝不能用状态色**。
+   * 第一版第二处用的是绿（`rgba(34,197,94,…)` = `--lz-state-success` 的色相）。看截图时
+   * 才发现那是个真错误：这个系统里绿色**是一个词**，意思是「成功」；把它当装饰铺在右下角，
+   * 于是「激活技能清单」那张卡带着一层绿 —— 读者会去找那层绿是什么意思，而它什么都不表示。
+   * DESIGN.md 的原话是「Functional color is reserved for meaning」。所以两处都改回强调色的蓝，
+   * 第二处更深一档，靠深浅而不是靠换色相来区分。
+   *
+   * 位置是**量出来的，不是挑出来的**：内容列居中、最大 1100px，侧边栏占掉 208px，所以卡片
+   * 实际落在视口横向的 20%–90% 一带。第一版把色晕放在 12% 与 104%（都在屏幕外或边缘），
+   * 卡片底下等于什么都没有 —— 截图里玻璃完全没出现。现在两处都挪进卡片覆盖的范围。 */
+  --lz-canvas-glow-a: rgba(77, 107, 254, 0.16);
+  --lz-canvas-glow-b: rgba(77, 107, 254, 0.1);
+  --lz-canvas-glow-size-a: 1100px 760px;
+  --lz-canvas-glow-size-b: 900px 640px;
+
   /* ---- 动效 ----
    * 动效是澄清变化，不是装饰。状态变化 100–200ms，浮层最多 ~300ms。 */
   --lz-duration-fast: 120ms;
@@ -201,4 +269,20 @@
   --lz-shadow-raised: 0 3px 1px -1px rgba(0, 0, 0, 0.4);
   --lz-shadow-popover: 0 8px 16px -4px rgba(0, 0, 0, 0.5);
   --lz-shadow-modal: 0 20px 20px -8px rgba(0, 0, 0, 0.6);
+
+  /* ---- 玻璃质感 · 暗色
+   * 暗色下玻璃是**浅黑而不是浅白**：表面越往上越亮那条规则照旧（见 DESIGN.dark.md），
+   * 所以玻璃的 alpha 比明色高一点 —— 黑色本身就吃光，太透会让内容糊在画布上。 */
+  --lz-glass-card: rgba(24, 24, 27, 0.66);
+  --lz-glass-elevated: rgba(32, 32, 36, 0.82);
+  --lz-glass-sidebar: rgba(14, 14, 16, 0.6);
+  --lz-glass-highlight: rgba(255, 255, 255, 0.08);
+  --lz-glass-hairline: rgba(255, 255, 255, 0.06);
+  /* 暗色下的投影要更重：黑底上浅色阴影看不见，只能靠更深的暗部把层次压出来。 */
+  --lz-shadow-glass:
+    inset 0 1px 0 var(--lz-glass-highlight),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 10px 28px -8px rgba(0, 0, 0, 0.55);
+  --lz-canvas-glow-a: rgba(96, 177, 255, 0.16);
+  --lz-canvas-glow-b: rgba(96, 177, 255, 0.1);
 }

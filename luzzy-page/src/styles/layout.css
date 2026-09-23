@@ -21,15 +21,51 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* ---------------------------------------------------------------- 画布底色
+ *
+ * 两层极淡的色晕，固定在两个对角，**位置落在卡片实际覆盖的范围里**。它不是装饰，是玻璃的
+ * 必要条件：backdrop-filter 只会模糊「背后真的有的东西」，均匀底色上的毛玻璃看起来就是一块
+ * 有点脏的实色。卡片是居中的一列（最大 1100px，侧边栏 208px），所以色晕必须在 20%–90% 这个
+ * 横向区间里 —— 放在屏幕两角等于卡片底下什么都没有，玻璃就完全不出现（第一版就是这样）。
+ * 只有两处、固定不动、不参与滚动，也不做任何动画。
+ *
+ * pointer-events: none —— 它是纯背景，绝不能挡住底下的点击。
+ */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(var(--lz-canvas-glow-size-a) at 24% 4%, var(--lz-canvas-glow-a), transparent 68%),
+    radial-gradient(var(--lz-canvas-glow-size-b) at 88% 92%, var(--lz-canvas-glow-b), transparent 70%);
+}
+
 /* ---------------------------------------------------------------- 页面骨架
  *
- * 三行：顶栏（页签 + 次要入口）、内容（唯一滚动区）、通知条（贴底、按需出现）。
- * 内容区是唯一的滚动容器——把滚动交给 body 会让顶栏跟着滚走。 */
+ * 两列：侧边栏（导航，不滚）+ 主区（内容唯一滚动区 + 贴底通知条）。
+ *
+ * 主区自己滚，不把滚动交给 body——那会让侧边栏跟着滚走，而导航滚出视野意味着
+ * 用户必须先把页面滚回顶部才能换页。
+ *
+ * 为什么是侧边栏而不是顶部页签：页签横向排，页数一多就得横向滚动或缩写标签；
+ * 纵向排加一项不影响其余项的宽度。 */
 .page {
+  position: relative;
+  z-index: 1;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   min-height: 100%;
+}
+
+.main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
 }
 
 .scroll {
@@ -53,67 +89,103 @@ body {
   gap: var(--lz-space-base);
 }
 
-/* ---------------------------------------------------------------- 顶栏 */
-.topbar {
+/* ---------------------------------------------------------------- 侧边栏
+ *
+ * 玻璃的第一处：导航是**浮在画布上的一层**，所以它透、它模糊，而内容卡片相对实一些。
+ * 这就是层级——Anthropic 那份把「所有卡片同一个圆角、同一层阴影」点名为失败形态，
+ * 而玻璃正好是最容易犯这个错的材质（全部半透明 = 全部同一层）。所以玻璃强度**分三档**：
+ *   sidebar 0.62 最透（它在最下面，是背景层）
+ *   card    0.72 中间
+ *   elevated 0.86 最实（对话框要能被读清楚）
+ */
+.rail {
   flex: 0 0 auto;
   display: flex;
-  align-items: center;
-  gap: var(--lz-space-sm);
-  padding: var(--lz-space-sm) var(--lz-page-pad);
-  border-bottom: 1px solid var(--lz-border-secondary);
-  background: var(--lz-bg-layout);
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-
-.topbar .spacer { flex: 1 1 auto; }
-
-/* 页签栏：胶囊底 + 分段控件，与 DSH 自己的分段控件同形。 */
-.segment {
-  display: inline-flex;
-  align-items: center;
+  flex-direction: column;
   gap: var(--lz-space-xxs);
-  padding: var(--lz-space-xxs);
-  border-radius: var(--lz-radius);
-  background: var(--lz-fill-tertiary);
+  width: 208px;
+  padding: var(--lz-space-base) var(--lz-space-sm);
+  border-right: 1px solid var(--lz-glass-hairline);
+  background: var(--lz-glass-sidebar);
+  backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
-.segment button {
+/* 品牌行。它不承担导航，所以比导航项低一档：更小、更淡、不吃点击。 */
+.railHead {
+  padding: var(--lz-space-xxs) var(--lz-space-xs) var(--lz-space-sm);
+  border-bottom: 1px solid var(--lz-glass-hairline);
+  margin-bottom: var(--lz-space-xs);
+}
+
+.railBrand {
+  font-size: var(--lz-font-sm);
+  font-weight: var(--lz-weight-strong);
+  color: var(--lz-text-tertiary);
+  letter-spacing: 0.02em;
+}
+
+/* 把「次要入口」推到底部。放一个 flex 撑开，比给最后一项写 margin-top: auto 稳 ——
+ * 导航项是循环生成的，加一项不该让布局跟着改。 */
+.railSpacer { flex: 1 1 auto; }
+
+.tabs { display: flex; flex-direction: column; gap: var(--lz-space-xxs); }
+
+/* 导航项：图标 + 文字。选中态用「实底 + 描边」，不用纯色块 ——
+ * 纯色块在玻璃上会把背后的内容整块盖住，那正是玻璃想避免的事。 */
+.navItem {
   appearance: none;
-  border: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--lz-space-xs);
+  width: 100%;
+  min-height: var(--lz-control);
+  padding: 0 var(--lz-space-xs);
+  border: 1px solid transparent;
+  border-radius: var(--lz-radius);
   background: transparent;
   color: var(--lz-text-secondary);
   font: inherit;
   font-size: var(--lz-font-base);
-  line-height: 1;
-  padding: var(--lz-space-xs) var(--lz-space-sm);
-  border-radius: var(--lz-radius-sm);
+  text-align: left;
   cursor: pointer;
-  white-space: nowrap;
   transition: background var(--lz-duration-fast) var(--lz-ease), color var(--lz-duration-fast) var(--lz-ease);
 }
 
-.segment button:hover { background: var(--lz-fill-secondary); color: var(--lz-text); }
-.segment button[aria-selected='true'],
-.segment button[aria-pressed='true'] {
-  background: var(--lz-bg-container);
+.navItem:hover { background: var(--lz-fill-tertiary); color: var(--lz-text); }
+
+.navItem[aria-current='page'] {
+  background: var(--lz-glass-elevated);
+  border-color: var(--lz-glass-hairline);
   color: var(--lz-text);
   font-weight: var(--lz-weight-strong);
   box-shadow: var(--lz-shadow-raised);
 }
 
+.navIcon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.navItem[aria-current='page'] .navIcon { stroke: var(--lz-accent); }
+
+.navLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* 焦点环：每一个可交互元素都要有，且只在键盘导航时出现。 */
-.segment button:focus-visible,
+.navItem:focus-visible,
 button:focus-visible,
 [tabindex]:focus-visible {
   outline: 2px solid var(--lz-focus-ring);
   outline-offset: 1px;
 }
-
-/* 页签太多时允许横向滚动，而不是把顶栏撑破 */
-.tabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.tabs::-webkit-scrollbar { display: none; }
 
 /* ---------------------------------------------------------------- 分栏栅格
  *
@@ -153,7 +225,10 @@ button:focus-visible,
 /* ---------------------------------------------------------------- 通知条
  *
  * 一个转瞬即逝的提示，贴在底部。不是对话框：对话框要用户答，这里只是告诉一声。
- * 空着时 `hidden`，不占横向空间。 */
+ * 空着时 `hidden`，不占横向空间。
+ *
+ * 它也是玻璃的一档：浮在内容之上，所以用最实的那层（elevated）——
+ * 一个需要读清楚的一句话提示，不该让人去分辨背后的东西。 */
 .noticeBar {
   flex: 0 0 auto;
   padding: 0 var(--lz-page-pad);
@@ -164,10 +239,12 @@ button:focus-visible,
   margin: 0 auto var(--lz-space-sm);
   max-width: var(--lz-column-max);
   padding: var(--lz-space-sm) var(--lz-space-base);
-  border: 1px solid var(--lz-border-secondary);
+  border: 1px solid var(--lz-glass-hairline);
   border-left: 3px solid var(--lz-state-waiting);
   border-radius: var(--lz-radius);
-  background: var(--lz-bg-elevated);
+  background: var(--lz-glass-elevated);
+  backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
   box-shadow: var(--lz-shadow-popover);
   font-size: var(--lz-font-base);
   color: var(--lz-text);
@@ -178,19 +255,56 @@ button:focus-visible,
 
 /* ---------------------------------------------------------------- 响应式
  *
- * 窄屏收的是**内边距**，不是列宽——设计系统要求主内容居中、留白随断点增长。 */
+ * 窄屏收的是**内边距**，不是列宽——设计系统要求主内容居中、留白随断点增长。
+ *
+ * 侧边栏在窄屏折成一条横向的图标带：导航不能消失（消失等于换不了页），但也不该
+ * 占掉一半宽度。图标那时独自承担识别，所以文字藏起来之后 aria-label 与 title 必须
+ * 还在（router.js 里两者都写了）。 */
+@media (max-width: 860px) {
+  .page { flex-direction: column; }
+  .rail {
+    flex-direction: row;
+    align-items: center;
+    width: 100%;
+    /* `flex: 0 0 auto` 必须重写：宽屏那条 `.rail { flex: 0 0 auto }` 是把侧边栏当成**行**里的
+     * 一个固定宽度项；折成纵向之后它成了列里的项，再按 auto 走就会被内容撑高。 */
+    flex: 0 0 auto;
+    gap: var(--lz-space-xxs);
+    padding: var(--lz-space-xs) var(--lz-space-xs);
+    border-right: 0;
+    border-bottom: 1px solid var(--lz-glass-hairline);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .railHead { display: none; }
+  .railSpacer { display: none; }
+  /* `flex-wrap: nowrap` 是这一条的关键，不是装饰：`.tabs` 宽屏时是纵向列，折过来只是把
+   * direction 改成 row，容器仍会**换行**——四个图标竖着堆成 144px 高的"横条"。
+   *
+   * **已知限制，如实记在这里**：加了 nowrap 之后仍然竖着堆。浏览器自己报告
+   * `flex-direction: row` + `flex-wrap: nowrap`（探针 tools/probe-sidebar-mq.mjs 实测），
+   * 而四个导航项量出来 left 相同、top 递增 —— 一个非换行的 row 容器里出现纵向堆叠，
+   * 我没能解释清楚，所以**不声称它已经折成横条**。
+   *
+   * 影响有界：四项都还在、图标都在、36×36 可点、页面不横向溢出；代价是窄屏下导航占 144px
+   * 高度而不是 36px。探针把这两条都断言了（包括"不许比单列更高"），修好时数字会自动变好，
+   * 不需要改断言。 */
+  .tabs { flex-direction: row; flex-wrap: nowrap; }
+  .navItem { width: auto; flex: 0 0 auto; }
+  .navLabel { display: none; }
+}
+
 @media (max-width: 720px) {
   :root { --lz-page-pad: var(--lz-space-base); }
-  .topbar { gap: var(--lz-space-xs); }
 }
 
 @media (max-width: 420px) {
   :root { --lz-page-pad: var(--lz-space-sm); }
-  .segment button { padding: var(--lz-space-xs); }
 }
 
 /* ---------------------------------------------------------------- 打印与无脚本兜底 */
 @media print {
-  .topbar, .noticeBar { display: none; }
+  .rail, .noticeBar { display: none; }
   .scroll { overflow: visible; }
+  body::before { display: none; }
 }

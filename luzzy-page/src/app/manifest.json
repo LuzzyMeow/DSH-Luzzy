@@ -24,7 +24,6 @@
     "app/dialog.js",
     "app/router.js",
     "app/app.js",
-    "pages/overview.js",
     "pages/goal.js",
     "pages/runtime.js",
     "pages/agent.js",

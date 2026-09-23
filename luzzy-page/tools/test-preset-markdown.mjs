@@ -545,10 +545,37 @@ const offSpacing = spacing.filter((v) => !ALLOWED_SPACING.has(v))
 check('spacing stays on the 4px base scale', offSpacing.length === 0,
   `off-scale spacing: ${offSpacing.join(', ')}`)
 
-// The decorative background was a hard-coded violet radial glow. Three separate rules forbade
-// it (semantic tokens only, no AI-violet default, and no ornament that cannot justify itself),
-// so its absence is asserted rather than left to review.
-check('the decorative radial glow is gone', !frameHtml.includes('radial-gradient'))
+// The decorative background was a hard-coded violet radial glow. Three separate rules forbade it
+// (semantic tokens only, no AI-violet default, and no ornament that cannot justify itself), so
+// its absence is asserted rather than left to review.
+//
+// RETARGETED (glass round). The old assertion was `!frameHtml.includes('radial-gradient')` — a
+// blunt ban on the FUNCTION, which cannot tell the banned decoration from a justified use. The
+// glass canvas needs a radial gradient: `backdrop-filter` over a UNIFORM background produces no
+// visible change at all, so the blur has nothing to blur and the card reads as slightly dirty
+// white. That is not a preference — it is how the property works.
+//
+// So the assertion now guards the PROPERTY the original rule was about, and it got stricter:
+//   1. every colour in the glow is a token reference (`var(--lz-canvas-glow-*)`), so the
+//      hard-coded-violet form is still impossible — this is what rule #2 was really saying;
+//   2. every radial gradient in the sheet lives inside that ONE rule — "one place, not a wash
+//      sprayed across the sheet". (Asserted as locality, not as a call count: the one rule
+//      declares two gradients, one per corner, and counting calls would fail a correct sheet.
+//      I wrote it as a count first and it did exactly that.)
+//   3. `pointer-events: none` is present, because a full-viewport overlay that eats clicks is
+//      a functional regression, and the glow is full-viewport by construction.
+// A hard-coded hex, a gradient anywhere else, or a missing pointer-events each fail this.
+const glowBlock = frameHtml.slice(frameHtml.indexOf('body::before'), frameHtml.indexOf('body::before') + 700)
+const glowGradients = [...frameHtml.matchAll(/radial-gradient\(/g)].length
+const inGlowBlock = [...glowBlock.matchAll(/radial-gradient\(/g)].length
+const glowHex = glowBlock.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []
+check('the canvas glow is token-driven, not a hard-coded violet',
+  glowGradients > 0 && glowHex.length === 0 && glowBlock.includes('var(--lz-canvas-glow-'),
+  `gradients=${glowGradients} hardcoded=${glowHex.join(',') || 'none'}`)
+check('and every gradient lives in that one rule, not sprayed across the sheet',
+  glowGradients === inGlowBlock && glowGradients <= 2,
+  `${glowGradients} total vs ${inGlowBlock} in the rule`)
+check('and it cannot swallow clicks', glowBlock.includes('pointer-events: none'))
 
 // The empty-editor hint rides generated content, NOT an element. A real placeholder node would
 // be picked up by serializeMarkdown and could be written into the user's prompt; CSS content is

@@ -8,14 +8,35 @@
 
 /* ---------------------------------------------------------------- Card
  *
- * 一张卡片 = 一个可独立阅读的单元。层级靠描边做出来，阴影只给真的浮起来的东西——
- * 所以卡片默认无阴影，只有一条 1px 的次级描边。 */
+ * 一张卡片 = 一个可独立阅读的单元。
+ *
+ * 它是玻璃的第二档（侧边栏 0.62 < 卡片 0.72 < 浮层 0.86）。三档不是随手排的：
+ * Anthropic 那份把「所有卡片同一个圆角、同一层阴影」点名为失败形态，而玻璃恰好是最容易
+ * 犯这个错的材质——全部半透明就等于全部在同一层。所以强度必须分档，**层级靠通透度说话**。
+ *
+ * 描边用半透明发丝线而不是实色 `--lz-border-secondary`：实色描边压在玻璃上会把它变成
+ * 一张实心卡片，玻璃感就没了。这也正是 Vercel 那条「半透明边框提升边缘清晰度」的用法。
+ *
+ * 圆角保持 8px（`--lz-radius`）。**没有为了「更玻璃」而加大圆角**：半径是另一套刻度，
+ * 把圆角当成玻璃的装饰是个单独的决定，而这次没有理由动它——一页一种圆角仍然成立。 */
 .card {
-  border: 1px solid var(--lz-border-secondary);
+  border: 1px solid var(--lz-glass-hairline);
   border-radius: var(--lz-radius);
-  background: var(--lz-bg-container);
+  background: var(--lz-glass-card);
+  backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
+  box-shadow: var(--lz-shadow-glass);
   padding: var(--lz-space-base) var(--lz-space-md);
   min-width: 0;
+}
+
+/* 不支持 backdrop-filter 时退回实底。
+ *
+ * 这一步不是可选的：`backdrop-filter` 不被支持时**卡片不会报错**，它只是变成一块半透明
+ * 的壳——文字压在页面底色的色晕上，对比度掉到读不清。功能查询把兜底值明确写出来，
+ * 而不是指望每个浏览器都认这个属性。 */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .card { background: var(--lz-bg-container); }
 }
 
 /* 标题行：标题在左，计数/控件在右。 */
@@ -524,12 +545,20 @@ code, .mono {
   overflow-wrap: anywhere;
 }
 
-/* ---------------------------------------------------------------- 提示与状态块 */
+/* ---------------------------------------------------------------- 提示与状态块
+ *
+ * 这几个块（callout / focusBox）都在卡片**内部**，所以它们**不能再叠一层玻璃**：
+ * 半透明压在半透明上，每一层都吃掉一点对比度，两层下去正文就守不住 4.5:1 了。
+ * 它们用极淡的填充色（半透明，因此仍能叠在玻璃上）而不是自己再 blur 一次。
+ *
+ * 这条边界是这次视觉改造里最容易做错的地方：看到「卡片是玻璃的」就顺手把里面每一块
+ * 也做成玻璃。玻璃是**表面**的性质，一块表面只能有一层。 */
 .callout {
   padding: var(--lz-space-sm);
-  border: 1px solid var(--lz-border-secondary);
+  border: 1px solid var(--lz-glass-hairline);
   border-left: 3px solid var(--lz-text-tertiary);
   border-radius: var(--lz-radius);
+  background: var(--lz-fill-quaternary);
   font-size: var(--lz-font-sm);
   line-height: var(--lz-line-height-sm);
   color: var(--lz-text-secondary);
@@ -692,10 +721,18 @@ code, .mono {
   max-height: 80vh;
   overflow: auto;
   padding: var(--lz-space-base) var(--lz-space-md);
-  border: 1px solid var(--lz-border-secondary);
+  border: 1px solid var(--lz-glass-hairline);
   border-radius: var(--lz-radius-lg);
-  background: var(--lz-bg-elevated);
+  /* 玻璃的**最高一档**。浮层盖在卡片之上，卡片又盖在画布之上，所以通透度必须递增：
+   * 对话框要在最上面被读清楚，它就该是最实的。 */
+  background: var(--lz-glass-elevated);
+  backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
+  -webkit-backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
   box-shadow: var(--lz-shadow-modal);
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .dialog { background: var(--lz-bg-elevated); }
 }
 
 .dialogTitle { margin: 0; font-size: var(--lz-font-lg); font-weight: var(--lz-weight-strong); line-height: 1.4; }
@@ -1464,6 +1501,57 @@ textarea.mdLayer:focus-visible { outline: 2px solid var(--dsw-static-deepseek-50
 .markdown blockquote p { margin: 0.3em 0; }
 
 .btnRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+
+/* ============================================================ 玻璃的无障碍降级
+ *
+ * 这一块**故意集中在一处**，尽管它管的选择器分散在 layout.css（.rail）与这里（.card /
+ * .dialog / .noticeBar 的 span）。理由：玻璃有三处降级条件，散开写会让「改了卡片忘了侧栏」
+ * 变成一个静默的、只在特定系统设置下才出现的缺陷 —— 而那个设置恰好是提这个需求的人在用。
+ *
+ * 三条降级各管一件事，来自两个独立来源（emil 的 apple-design 与 ui-ux-pro-max 的
+ * Liquid Glass 条目各自给出同一组）：
+ *
+ *   1. prefers-reduced-transparency: reduce
+ *      系统级「减少透明度」。**这是半透明材质唯一专门的用户设置**，玻璃界面不认它就是没做
+ *      无障碍。降级 = 提高不透明度到近实心 + 去掉 blur。
+ *
+ *   2. prefers-contrast: more
+ *      要更高对比。降到实底并**把发丝线换成明确可见的描边** —— 只提高不透明度不够，
+ *      玻璃的边界本来就是靠那条极淡的线撑的，对低视力用户它必须真的看得见。
+ *
+ *   3. 打印
+ *      打印机没有「背后」可模糊，玻璃会印成一块脏灰。layout.css 里已把侧边栏与画布色晕
+ *      去掉，这里把卡片与浮层拉回白底。
+ *
+ * **为什么不把 reduced-motion 也写在这**：动效的降级规则跟着各自的动画走（badgePulse /
+ * skeletonPulse / chartIn 那几处），它们已经在定义动画的同一个地方，挪到这里反而会让人
+ * 在改动画时看不到它。玻璃这三条不同：它们管的是**表面**，而表面定义在这里。 */
+@media (prefers-reduced-transparency: reduce) {
+  .card, .dialog, .rail, .noticeBar span {
+    background: var(--lz-bg-container);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .dialog { background: var(--lz-bg-elevated); }
+  .noticeBar span { background: var(--lz-bg-elevated); }
+}
+
+@media (prefers-contrast: more) {
+  .card, .dialog, .rail, .noticeBar span {
+    background: var(--lz-bg-container);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-color: var(--lz-border);
+  }
+  .dialog { background: var(--lz-bg-elevated); }
+  .noticeBar span { background: var(--lz-bg-elevated); }
+  /* 侧边栏与主区的分界必须真的看得见，而不是靠一条 6% 的发丝线。 */
+  .rail { border-right-color: var(--lz-border); }
+}
+
+@media print {
+  .card, .dialog { background: var(--lz-bg-container); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
 
 /* A state, not a control: it reports what is already true. Sized like a button so the row
    keeps its rhythm, but with no border, no hover and no pointer. */
