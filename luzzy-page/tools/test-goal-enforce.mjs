@@ -1167,10 +1167,16 @@ try {
 
     const blocked = await attempt()
     eq('an empty goal is refused', blocked.kind, 'deny')
+    // Read the reason through a guard rather than straight off `blocked`. When the gate is
+    // broken, `blocked` is an allow and has no `reason`; accessing it throws, which CRASHES
+    // the suite and skips every assertion after this one. A crash and a clean failure both go
+    // red, but only the clean failure says which behaviour broke — and while proving the
+    // negative control (tools/prove-gate.mjs) that difference is the whole readout.
+    const blockedReason = typeof blocked.reason === 'string' ? blocked.reason : ''
     check('and the refusal is the INCOMPLETE one, not the missing one',
-      /GOAL_INCOMPLETE/.test(blocked.reason), blocked.reason)
+      /GOAL_INCOMPLETE/.test(blockedReason), blockedReason)
     for (const field of ['验收标准', '范围边界', '已知约束']) {
-      check(`and names the missing field "${field}"`, blocked.reason.includes(field), blocked.reason)
+      check(`and names the missing field "${field}"`, blockedReason.includes(field), blockedReason)
     }
 
     // Fill them the way the AGENT actually can, and the same call goes through. Scope and

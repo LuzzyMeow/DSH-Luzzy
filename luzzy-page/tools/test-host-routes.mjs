@@ -204,6 +204,79 @@ try {
     presetJson?.capabilities?.sessionPresetSwitch === false,
     JSON.stringify(presetJson?.capabilities),
   )
+
+  // ---- RUNTIME ACCEPTANCE: the session gate, through the REAL apply() --------------
+  //
+  // Every other gate assertion runs against a hand-built ctx in test-goal-enforce.mjs. That
+  // proves the gate FUNCTION works; it cannot prove the gate is what `apply()` actually
+  // installed, with the real wiring and the real hook order. This block drives the listeners
+  // that `apply()` registered, over a real session id and real files, and asks the three
+  // questions a user would: does work get held before a goal exists, does a chat get through,
+  // and does work get released once the plan can answer "when is it done".
+  //
+  // The hook is a cordis waterfall: `(exec, next)`. `next()` is the rest of the chain, so
+  // driving it with a terminal `{kind:'allow'}` reproduces what the tool layer would see.
+  {
+    // CORDIS WATERFALL SEMANTICS, which the first draft of this block got wrong.
+    //
+    // These listeners form a chain: each `next()` runs the rest. A `deny` does NOT stop the
+    // chain — the tool layer reads the LAST decision. So driving every listener and keeping
+    // the final value is correct, but the earlier draft drove them with `next()` resolving to
+    // `{kind:'allow'}`, which meant a later listener's allow overwrote the gate's deny and the
+    // probe reported "not held" while the gate had in fact denied.
+    //
+    // The real chain is the plugin's own two listeners, and the second one (the completion
+    // gate) passes non-`update_goal` calls straight through. What the user experiences is the
+    // TOOL LAYER's combined view, so this reproduces that: run the chain, and if ANY listener
+    // denied, the call is denied.
+    const chain = async (name, agent) => {
+      const seen = []
+      let decision = { kind: 'allow' }
+      for (const handler of listeners.get('tools/pre-execute') ?? []) {
+        decision = await handler({ name, arguments: {}, agent }, () => Promise.resolve(decision))
+        seen.push(decision?.kind)
+      }
+      const denied = seen.includes('deny')
+      return { decision, seen, denied }
+    }
+    const sessionOf = (id) => ({ id, session: { id, header: { cwd: null }, snapshotEvents: () => [] } })
+
+    // 1. A fresh session with no goal: work is held.
+    const held = await chain('write', sessionOf('accept-no-goal'))
+    check('acceptance: a write with no goal is held', held.denied, JSON.stringify(held.seen))
+    const refusal = (listeners.get('tools/pre-execute') ?? [])
+    const firstDecision = await refusal[0](
+      { name: 'write', arguments: {}, agent: sessionOf('accept-no-goal-2') },
+      () => Promise.resolve({ kind: 'allow' }),
+    )
+    check('acceptance: and the refusal is the gate one', /GOAL_GATE_REQUIRED/.test(firstDecision?.reason ?? ''), (firstDecision?.reason ?? '').slice(0, 60))
+
+    // A READ is held too (the strict setting), asserted here because this is the only place
+    // the REAL chain runs — a fake could disagree with the shipped wiring.
+    const heldRead = await chain('read', sessionOf('accept-no-goal'))
+    check('acceptance: and so is a read', heldRead.denied, JSON.stringify(heldRead.seen))
+
+    // 2. The exits work through the real chain, or the gate would be unescapable.
+    const viaGoal = await chain('goal_delivery', sessionOf('accept-no-goal'))
+    check('acceptance: goal_delivery passes', !viaGoal.denied, JSON.stringify(viaGoal.seen))
+    const viaAsk = await chain('ask_user_question', sessionOf('accept-no-goal'))
+    check('acceptance: ask_user_question passes', !viaAsk.denied, JSON.stringify(viaAsk.seen))
+
+    // 3. The chat exit: declare, then the same write is released.
+    const chatAgent = sessionOf('accept-chat')
+    // Drive the declaration through the real listener set, so the state it records is the one
+    // the shipped code records.
+    for (const handler of listeners.get('tools/pre-execute') ?? []) {
+      await handler(
+        { name: 'goal_delivery', arguments: { action: 'declareNonTask', reason: '用户在打招呼' }, agent: chatAgent },
+        () => Promise.resolve({ kind: 'allow' }),
+      )
+    }
+    const afterDeclare = await chain('write', chatAgent)
+    check('acceptance: after declaring "not a task", work is released', !afterDeclare.denied, JSON.stringify(afterDeclare.seen))
+
+    notes.push('       acceptance: gate exercised through the real apply() wiring')
+  }
 } finally {
   server.close()
 }
