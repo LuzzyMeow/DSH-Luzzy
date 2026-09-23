@@ -313,6 +313,50 @@
     for (const card of cards) grid.append(card)
   }
 
+  /**
+   * 「实时监测窗口大小」——把它**量出来并说出来**，而不是只让 CSS 隐式地跟着变。
+   *
+   * 帧是独立文档，它的视口就是那个 iframe 的盒子；宿主半把它设成 100%×100%，所以面板一改大小，
+   * 帧的 `innerWidth/innerHeight` 立刻跟着变，这就是「检测」本身 —— 不需要任何 JS 去问 Electron。
+   * 但**看不出来这件事发生过**，所以：
+   *
+   *   1. 三个档位写到 `<html data-vw>` 上：narrow / mid / wide。它是可断言的（`[data-vw="narrow"]`），
+   *      也能让「现在到底按哪个档在排」在截图和探针里都是可见的事实；
+   *   2. 每次变化都 `report('viewport', …)` 一次，落进 diag 文件 —— 面板在真机上到底多宽，
+   *      只有这条记录说得清（离线截图工具给的是它自己开的窗口，不是你的面板）。
+   *
+   * 用 `resize` + `visualViewport` 两个来源，因为只有 `resize` 在部分嵌入场景下会漏掉。
+   */
+  const VIEWPORT_MID = 860
+  const VIEWPORT_WIDE = 1240
+
+  function measureViewport() {
+    const w = window.innerWidth
+    const h = window.innerHeight
+    const band = w <= VIEWPORT_MID ? 'narrow' : (w < VIEWPORT_WIDE ? 'mid' : 'wide')
+    const root = document.documentElement
+    if (root.dataset.vw !== band) root.dataset.vw = band
+    root.dataset.vwPx = String(w)
+    root.dataset.vhPx = String(h)
+    return { w: w, h: h, band: band }
+  }
+
+  function watchViewport() {
+    let last = ''
+    const onChange = function () {
+      const m = measureViewport()
+      const key = m.w + 'x' + m.h
+      if (key === last) return
+      last = key
+      report('viewport', m)
+    }
+    window.addEventListener('resize', onChange)
+    if (window.visualViewport !== undefined && window.visualViewport !== null) {
+      window.visualViewport.addEventListener('resize', onChange)
+    }
+    onChange()
+  }
+
   function render() {
     if (tabbar !== null) tabbar.innerHTML = LZ.Router.tabBar(state.tab)
     if (content === null) return
@@ -1021,6 +1065,8 @@
     askForSession: askForSession,
     start: function () {
       report('frame-boot', location.href)
+      // 先量视口再画第一帧：`data-vw` 在第一次 render 之前就位，页面不会先按错档排一次。
+      watchViewport()
       wire()
       render()
       askForSession()
