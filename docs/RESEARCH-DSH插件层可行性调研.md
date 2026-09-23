@@ -714,7 +714,7 @@ browser (ui-kb) ──fetch /kb──▶ host (rag-kb) ──curl──▶ Ollam
 
 诚实起见，以下没查清：
 
-1. **HanaAgent「延迟加载工具」的确切实现**——只拿到视频自述与文件名线索（`tool-catalog.ts` / `tool-catalog-bridge.ts` / `tool-availability.ts`），未逐行验证「工具有效集按需扩缩」。本报告 §5.4 给的是**在 DSH 上重新设计**的方案，不是对它实现的复述。
+1. ~~**HanaAgent「延迟加载工具」的确切实现**~~ → **已关掉（2026-09-23）**。源码逐行核过（本机浅克隆 v0.450.0 / `1d3ef308`），机制见 §七·补。**并且确认一件更要紧的事**：reminder 与「延迟加载工具」是**两个特性**，不是一件事 —— 前者信封 `[hana_reminder]`（正文硬上限 300 字符），后者走 `[hana_reference]`（自己的预算）。视频里作者说的「系统才请求一张小纸条」是营销口径，代码里是**目录 + 三件套 + 尾部投递**。
 2. **`agent/inject()` 的生成签名**——`docs/04-服务与运行时.md` §9 自己就把它列为「没查清的部分」；本报告是从 `dsh-agent-loop/lib/index.js:795` 的实现读出的，未见官方签名文档。
 3. **ReMe `LocalFileStore` 的底层实现**——QwenPaw 只读本仓无法证实（`cli/doctor_checks.py:236-245` 有「SQLite < 3.35 可能破坏某些向量库」的警告，暗示底层是 SQLite，但属【推断】）。
 4. **`dsh-rag-kb` 的实际可用性**——只读了它的 Discussion 自述（README 声称的安装五步），未 clone 验证。
@@ -724,6 +724,109 @@ browser (ui-kb) ──fetch /kb──▶ host (rag-kb) ──curl──▶ Ollam
 
 - ~~DSH 侧 DeepSeek usage 是否含 cache 字段~~ → **已实测**：`TokenUsage` 含 `cacheReadTokens` / `cacheWriteTokens`，DeepSeek 适配器已映射。见 §4.3 与 §5.1。
 - ~~`LlmCallConfig` 是否开放自定义 header~~ → **已实测**：只有 6 个字段，无 header。结论从「待核」变为「🔴 插件层不可行」。见 §4.3。
+
+---
+
+## 七·补、工具说明书延迟加载 —— 逐轮改工具定义到底能不能做（2026-09-23 复核）
+
+> §5.4 那一版设计草案写在一个**没被验证过的前提**上。这一节是补上证据之后的复核，
+> 其中一处结论**要翻过来**：不是「必须走尾部追加、不能碰 `tools` 数组」，
+> 而是「**能碰 `tools`，但每轮都碰才是代价**」。
+
+### 补.1 钩子是 `system-prompt/assemble`，`tools/*` 里没有
+
+`tools/*` 一共六个事件（`dsh-tool-cordis/lib/index.js:5551-5618`）—— `tools/change`、
+`tools/pre-execute`、`tools/execute`、`tools/post-execute`、`tools/result`、
+`tools/ptc-dispatch-log` —— **全部是执行期的**。组装期一个都没有。
+
+绕过去的是系统提示词的 waterfall（`dsh-tool-cordis/lib/index.js:5529-5531`）：
+
+```
+'system-prompt/assemble'(this: Scoped<SystemPrompt>, assembly: PromptAssembly,
+                         context: AssembleContext, next: () => Promise<PromptAssembly>): Promise<PromptAssembly>
+```
+
+`PromptAssembly` 里就有 `tools: ToolSchema[]`，**可变数组，返回替换值即生效**
+（`dsh-system-prompt/lib/index.js:351`），并且真的通向模型
+（`dsh-agent-loop/lib/index.js:1030` → `buildRequest(..., assembly.tools, ...)` → 请求头）。
+
+三条让它安全的事实，都读到了原文：
+
+| 事实 | 位置 | 为什么重要 |
+|---|---|---|
+| 工具清单**每个 step 重算** | `dsh-agent-loop/lib/index.js:890`（`preStep` 内）、`:937` | 「按轮次改」不是外挂，是本来就走的路 |
+| `assemble()` 对每条 schema 做 `structuredClone` | `dsh-system-prompt/lib/index.js:322-326` | 改副本**不会污染注册表** |
+| 自带的唯一不变量只校验 `name` | `dsh-system-prompt/lib/invariant.js:25` | `description` / `parameters` **根本不校验** |
+
+**缺的那一环是语义上的，不是机制上的**：DSH 把工具定义当**组装期产物**（`assembly.tools`），
+没把它当**可拦截的执行期事件**。逐轮粒度的 `ctx.tools.restrict()` 也不存在 ——
+`dsh-tools/lib/index.js:2790-2805` 是 `effect` 注册，作用域内常驻直到 dispose，
+且只能整条去掉工具，**不能只改 description**。
+
+### 补.2 缓存：破，而且 DSH 自己会检测
+
+`dsh-agent-loop/lib/index.js:910-917` 的 `toolsChanged()` 把本轮工具与上一条请求头**逐条
+JSON 字符串比对**；为真则在 `:1019-1022` 把 `startsSeries` 置为 `true`，于是系统提示词
+**节点 0 被原地重写**（`:266-284` 的 `SystemPromptProjection.project`）。
+
+DSH 自己的 README 把代价说死了（`dsh-agent-loop/README.zh.md:160`，逐字）：
+
+> schema 或组合变更则从第一个改变的请求 token 起使复用失效。
+
+**所以「不能改写 `tools` 数组」这个说法不准确。准确的是：「不能让它每轮都不一样」。**
+推论（本项目判断，非官方文档）：**常驻态恒定**（所有轮同一套短描述）时，
+只有「取说明书」那一步破缓存，其余步全部命中。
+
+另有两条排除项：
+- `dsh-compaction-basic/README.zh.md:12` 明说压缩**帮不上忙**（「无法缩减系统提示词、工具或会话前缀」）。
+- **DeepSeek 的 `tools` 字段参不参与前缀缓存 —— 官方 KV-cache 文档没说，标未核实。**
+  要用 `prompt_cache_hit_tokens` 实测，别假设。
+
+### 补.3 修正后的形状
+
+```
+system-prompt/assemble   → 把每个工具的 description 压成一行（恒定，不随轮变）
+agent/pre-step           → 模型要某个工具时，把完整说明作为一条 message 追加到对话尾部
+                           （PreStepDecision 的 messages 可整体替换；常见做法见
+                            dsh-tool-cordis/lib/index.js:9494-9518）
+tools/pre-execute        → 准入（本项目已有的那道门）
+```
+
+「先有目标才给工具」这一条**在既有实现里没有先例**，见补.5。
+
+### 补.4 外部一手证据（八家，逐条带来源）
+
+| 实现 | 做法 | 关键数字 / 原话 | 置信度 |
+|---|---|---|---|
+| Anthropic Tool Search Tool | `defer_loading: true`，命中后展开完整定义 | 55K → **8.7K（-85%）**；MCP 准确率 Opus 4 **49%→74%** | 高（官方工程博客） |
+| OpenAI / Azure `tool_search` | 逐函数/namespace/server defer | **「模型仍能看到名字与描述，主要推迟的是参数 schema」**；工具**追加在上下文末尾**以保缓存 | 高（微软官方文档） |
+| Claude Code SDK | 默认开，窗口 10% 触发，每次 ≤5 个 | **30-50 个工具以上选择准确率下降**；非一方 base_url 会**关掉** tool search | 高（官方文档） |
+| Cursor | 不做 search，把工具描述同步成文件夹让 agent `rg` | MCP 场景总 token **-46.9%**（A/B） | 高（官方博客） |
+| HanaAgent（openhanako v0.450.0） | 目录一行/工具 + `mcp_search_tools` / `mcp_describe_tool` / `mcp_call` | 清单走 `[hana_reference]` 尾部投递、**一次/会话**；装配**会话内不再变** | 高（本机克隆源码，file:line 见子报告） |
+| NVIDIA NemoClaw | 三家 agent 各自的 bridge | **「Progressive disclosure changes model context, not authorization」** | 高（官方文档） |
+| MCP 协议 | 只定义 `notifications/tools/list_changed` | 客户端**是否响应没有强制要求**，别依赖它自动同步 | 高（规范正文） |
+| AWS Bedrock | cache checkpoint 顺序 | **`tools → system → messages` 链式**，改 `tools` 会连后面一起失效 | 高（官方文档） |
+
+术语：`tool search tool` ｜ `deferred tool loading` / `defer_loading` ｜
+`progressive tool disclosure` ｜ `dynamic context discovery`（Cursor）｜
+`tool retrieval`（学术）｜ `MCP tax`（论文）。
+
+### 补.5 三条会决定成败的告诫
+
+1. **目标门不能把目录也摘掉。** 模型看不见工具时，唯一补救是它知道「有这么一类能力可以找」。
+   要么给一份目录（HanaAgent 的做法），要么往系统提示里写一句「有哪些类别的工具可搜」
+   （Anthropic 的做法）。**门要设在 describe / call 那一步**，即已有的 `tools/pre-execute`。
+2. **可见性与授权要分开。** 上一行那句 NVIDIA 原话就是理由；HanaAgent 的 `mcp_call`
+   也从不以自己的名义申请审批，而是先解析目标、出示**真实能力**。
+3. **小工具集别做。** Claude Code 文档与 Anthropic 博客都说 <10 个工具载入全部更快。
+   本插件目前工具数远低于阈值，**这件事现在做是负收益**。
+
+### 补.6 这条结论怎么来的
+
+两个后台子代理各跑一路：一路读 HanaAgent 源码 + 八家官方文档（外部证据），
+一路读 DSH 安装字节里的 `dsh-agent-loop` / `dsh-system-prompt` / `dsh-tools`（本机机制）。
+**本节的 file:line 全部来自实际读到的原文**，标「本项目判断」的是推断。
+两边交叉一致的一点：**不要在轮次之间改变工具集** —— 与 §5.4 草案的方向一致，理由更硬了。
 
 ---
 
