@@ -20,7 +20,9 @@ const committed = execFileSync('git', ['show', 'HEAD:luzzy-page/lib/client.js'],
 console.log('=== does the committed artifact carry this round\'s work? ===')
 for (const [label, needle] of [
   ['objectiveText (objective renderer)', 'objectiveText'],
-  ['the viewer handoff button', 'data-viewer="objective"'],
+  // 针里不能带引号：帧文档在产物里是 JSON 字符串字面量，属性值写成 data-viewer=\"objective\"，
+  // 带引号的针永远搜不到（第一次跑就是这样报了个假 NO）。
+  ['the viewer handoff button', 'data-viewer'],
   ['viewerText (pre-wrap body)', 'viewerText'],
   ['dialogContent (single scroll layer)', 'dialogContent'],
   ['white-space: pre-wrap', 'white-space: pre-wrap'],
