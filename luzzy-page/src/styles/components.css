@@ -1015,7 +1015,59 @@ code, .mono {
   font-variant-numeric: tabular-nums;
 }
 
-/* ---------------------------------------------------------------- 分段控件 */
+/* ---------------------------------------------------------------- 分段控件
+ *
+ * `.segment` 从这一页第一次写出来就**没有任何规则** —— 上面这个分区标题、下面这行 `.segLabel`，
+ * 中间是空的。于是「模型趋势」右上角那两组按钮（日/周/月、折线/条形）一直是一排裸 `<button>`：
+ * 浏览器默认外观、没有容器、没有选中态，只有 `aria-pressed` 在 DOM 里变化，而没有任何东西
+ * 读它。用户看图说「这里的 CSS 是不是掉了」——是掉了。
+ *
+ * 形状照参考实现（lobe-ui `Segmented` 的 filled 变体：`border: 1px solid colorFillQuaternary;
+ * background: colorBgLayout`）搬到本项目的语义 token 上：
+ *   colorFillQuaternary → --lz-border-secondary
+ *   colorBgLayout       → --lz-bg-layout
+ * 选中态用的是**"抬起来"**而不是"染上主色"：容器已经是一块浅底，选中项用容器色 + 一道投影，
+ * 和本页卡片的层级语言一致（背景越亮 = 越靠前），也不会为一次点击花掉整个页面的强调色额度。
+ *
+ * 选中态读的是 `aria-pressed`，不是新增一个类：状态本来就已经写在 DOM 上（system.js 每次重画
+ * 都会更新它），再加一个类就有两份真相，而它们迟早会不一致。
+ */
+.segment {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--lz-border-secondary);
+  border-radius: var(--lz-radius);
+  background: var(--lz-bg-layout);
+}
+
+.segment > button {
+  padding: 2px var(--lz-space-xs);
+  border: 0;
+  border-radius: var(--lz-radius-sm);
+  background: transparent;
+  color: var(--lz-text-secondary);
+  font: inherit;
+  font-size: var(--lz-font-sm);
+  line-height: 1.6;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+/* hover 只给指针设备。触屏上点一下会留下粘住的 hover 态，那不表示任何东西。 */
+@media (hover: hover) and (pointer: fine) {
+  .segment > button:hover:not([aria-pressed='true']) {
+    background: var(--lz-bg-container-secondary);
+    color: var(--lz-text);
+  }
+}
+
+.segment > button[aria-pressed='true'] {
+  background: var(--lz-bg-container);
+  color: var(--lz-text);
+  box-shadow: var(--lz-shadow-raised);
+}
+
 .segLabel { font-size: var(--lz-font-sm); color: var(--lz-text-tertiary); }
 
 /* ---------------------------------------------------------------- 页脚说明 */

@@ -166,7 +166,10 @@
 
     return LZ.Card.card({
       title: '模型趋势',
-      count: windowCaption,
+      // 这里原来还传了 `count: windowCaption`，而同一个 `windowCaption` 已经作为标签进了右边那组
+      // 控件（`segLabel`）——于是卡片抬头把它印了两遍：「今天的 24 小时 今天的 24 小时」。
+      // 标签跟着控件走，因为**它随选中的时间窗变化**；抬头那个位置是「多少个」，
+      // 放一个会变的视图名会让它看起来像数据。
       actions: controls,
       body: hasData
         ? LZ.Chart.trend(active.series, active.slots, state.mode, state.animateChart)

@@ -926,6 +926,49 @@ if (entry) {
       '横幅自己成了第二层玻璃，字会沉下去')
   }
 
+  // ------------------------------------------------- 分段控件：CSS 真的存在吗
+  //
+  // 用户看图问「这里的 CSS 是不是掉了」。查下来是**掉了**：`components.css` 里有
+  // 「分段控件」分区标题、有 `.segLabel`，而 `.segment` 一条规则都没有 —— 于是「模型趋势」
+  // 右上角那两组按钮一直是一排裸 `<button>`，只有 `aria-pressed` 在 DOM 里变，没人读它。
+  //
+  // 这条断言不能只写「`.segment` 出现过」：文件名在注释里也会出现（上面那句就是），
+  // 所以要断**规则**：`{` 之后必须真的有声明。
+  {
+    const css = readFileSync(join(PLUGIN_ROOT, 'src', 'styles', 'components.css'), 'utf8')
+    const ruleOf = (sel) => {
+      const i = css.indexOf(sel + ' {')
+      if (i < 0) return ''
+      return css.slice(i, css.indexOf('}', i))
+    }
+    const container = ruleOf('.segment')
+    const item = ruleOf('.segment > button')
+
+    check('the segmented control actually has a rule', container.includes('display: inline-flex'))
+    check('and it draws its own container', container.includes('border: 1px solid'))
+    check('and its items have a rule too', item.includes('background: transparent'))
+
+    // 选中态读的是 `aria-pressed`，不是新增一个类 —— 状态本来就写在 DOM 上（system.js 每次
+    // 重画都会更新它），再加一个类就有两份真相，而它们迟早会不一致。
+    check('the pressed state is driven by aria-pressed, not a class',
+      css.includes(".segment > button[aria-pressed='true']"))
+    check('and the pressed item is raised, not tinted with the page accent',
+      /\.segment > button\[aria-pressed='true'\] \{[\s\S]{0,220}?box-shadow:/.test(css),
+      '选中态改用强调色了：一次点击不该花掉整页的强调色额度')
+
+    // 触屏上点一下会留下粘住的 hover 态，那不表示任何东西。
+    check('hover is gated behind a pointer device',
+      /@media \(hover: hover\) and \(pointer: fine\) \{\s*\.segment > button:hover/.test(css))
+
+    // 抬头把同一个标题印了两遍：「今天的 24 小时 今天的 24 小时」。
+    const system = readFileSync(join(PLUGIN_ROOT, 'src', 'pages', 'system.js'), 'utf8')
+    check('the chart card does not print its caption twice',
+      !/title: '模型趋势',\s*count: windowCaption/.test(system),
+      '抬头又把窗口标题印了一遍')
+    check('and the caption still rides with the controls',
+      system.includes("'<span class=\"segLabel\">' + esc(windowCaption) + '</span>'"))
+  }
+
 // ---------------------------------------------------------------- report
 
 console.log(notes.join('\n'))
