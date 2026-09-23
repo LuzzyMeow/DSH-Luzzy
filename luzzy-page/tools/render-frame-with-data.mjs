@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
+import { readFrameHtml } from './frame-source.mjs'
 import { shoot } from './shoot.mjs'
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -33,7 +34,10 @@ const dark = args.includes('--dark')
 const out = argValue('--out', join(tmpdir(), `luzzy-frame-${tab}${dark ? '-dark' : ''}.html`))
 const shot = argValue('--shot', null)
 
-const frameHtml = readFileSync(join(tmpdir(), 'luzzy-frame-preview.html'), 'utf8')
+// Read the frame from the BUNDLE, not a cached temp copy: the cache is only rewritten by
+// render-frame-preview.mjs, so after a rebuild it silently serves the previous build's markup
+// (§5.26's class of bug, and it made several screenshots stale evidence).
+const frameHtml = readFrameHtml()
 // The usage payload as the host now returns it: totals + buckets + models + all three
 // trend windows + the month activity strip. One payload, no per-unit variants.
 const usage = JSON.parse(readFileSync(join(tmpdir(), 'luzzy-usage-data.json'), 'utf8'))
@@ -111,6 +115,21 @@ function buildGoalFixture() {
     ['reconcile', { goalId: 'goal-preview-1', goalRevision: 7, objective: '把 Settings 页改造成新的 Dashboard，并接入 /api/tasks' }],
     ['proposeScope', { included: ['dashboard 页面与它的数据接入'], excluded: ['后端 /api/tasks 本身的实现'], reason: '接口已经存在，本次只做前端接入' }],
     ['addEvidence', { summary: '用户在页面上确认了 loading 态', kind: 'user_confirmation' }],
+    // 状态链与激活技能：截图要能看到这两块，否则「视图存在」只是源码里的说法。
+    // 两条都按真实顺序来 —— 先答链（且技能那一步是「命中」），再登记技能。
+    ['judgeChain', { goalMatch: 'matched', skillCheck: 'hit' }],
+    ['activateSkill', {
+      name: 'luzzy-roster-design',
+      description: '设计类基线五条：设计判断、清单与提示、开放设计规范、UI-UX 正文、动效纪律',
+      purpose: '本次要判断 Dashboard 的视觉层级、圆角与间距是否有成套规则',
+      source: 'https://github.com/LuzzyMeow/LuzzyPrompt/tree/main/skills/luzzy-roster-design',
+    }],
+    ['activateSkill', {
+      name: 'luzzy-roster-html',
+      description: 'HTML / 网页开发七条取四条，含官方两份',
+      purpose: '本次要确认单文件预览的打开方式与响应式验收口径',
+      source: 'https://github.com/LuzzyMeow/LuzzyPrompt/tree/main/skills/luzzy-roster-html',
+    }],
   ]
   for (const step of steps) {
     const [op, payload, extra] = step
@@ -174,7 +193,24 @@ const shim = `
     if (u.indexOf('/__luzzy/goal') === 0) {
       // The real route answers a mutation with the WHOLE next state, so the fixture does
       // too rather than pretending the route returns something smaller.
-      return Promise.resolve({ ok: true, json: function () { return Promise.resolve(GOAL); }, text: function () { return Promise.resolve(''); } });
+      //
+      // **Served as TEXT, because that is how the frame reads it.** app.js's fetch wrapper goes
+      // through the response text() method and then parses it as JSON, so a shim that only
+      // implements json() hands the page an empty string — the page then renders「目标状态读不出来」
+      // and a screenshot of this tab is a picture of the ERROR state, not of the page. That is
+      // exactly what every goal-tab shot in this tool's history was, until it was caught by
+      // reading the frame's own overlay (tools/probe-frame-console.mjs). The default tab is
+      // usage, so the stale fixture went unnoticed.
+      //
+      // (No backticks or dollar-brace anywhere in this comment on purpose: this whole shim is a
+      // NODE-side template string, so a bare backtick ends it early and a dollar-brace is
+      // evaluated in Node — see AGENTS.md §5.9. I hit the backtick half of that here, twice.)
+      var goalText = JSON.stringify(GOAL);
+      return Promise.resolve({
+        ok: true, status: 200,
+        json: function () { return Promise.resolve(GOAL); },
+        text: function () { return Promise.resolve(goalText); },
+      });
     }
     if (u.indexOf('/__luzzy/preset') === 0) {
       // The frame's only POST is readPrompt, which asks for one agent's full text. The

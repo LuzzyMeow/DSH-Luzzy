@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
+import { readFrameHtml } from './frame-source.mjs'
 import { shoot } from './shoot.mjs'
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -32,7 +33,10 @@ const dark = args.includes('--dark')
 const shot = argValue('--shot', null)
 const out = join(tmpdir(), `luzzy-hover-${windowName}-${mode}${dark ? '-dark' : ''}.html`)
 
-const frameHtml = readFileSync(join(tmpdir(), 'luzzy-frame-preview.html'), 'utf8')
+// Read the frame from the BUNDLE, not a cached temp copy: the cache is only rewritten by
+// render-frame-preview.mjs, so after a rebuild it silently serves the previous build's markup
+// (§5.26's class of bug, and it made several screenshots stale evidence).
+const frameHtml = readFrameHtml()
 const usage = JSON.parse(readFileSync(join(tmpdir(), 'luzzy-usage-data.json'), 'utf8'))
 const readme = readFileSync(join(PLUGIN_ROOT, 'README.md'), 'utf8')
 

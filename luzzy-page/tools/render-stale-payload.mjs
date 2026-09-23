@@ -17,13 +17,17 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
+import { readFrameHtml } from './frame-source.mjs'
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const args = process.argv.slice(2)
 const dark = args.includes('--dark')
 const out = join(tmpdir(), `luzzy-stale${dark ? '-dark' : ''}.html`)
 
-const frameHtml = readFileSync(join(tmpdir(), 'luzzy-frame-preview.html'), 'utf8')
+// Read the frame from the BUNDLE, not a cached temp copy: the cache is only rewritten by
+// render-frame-preview.mjs, so after a rebuild it silently serves the previous build's markup
+// (§5.26's class of bug, and it made several screenshots stale evidence).
+const frameHtml = readFrameHtml()
 const current = JSON.parse(readFileSync(join(tmpdir(), 'luzzy-usage-data.json'), 'utf8'))
 
 // The old shape: strip everything this build added, keep what the old host half returned.
