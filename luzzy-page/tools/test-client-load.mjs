@@ -544,25 +544,44 @@ if (entry) {
     check('but still renders it when the tone differs',
       /:\s*LZ\.StatusBadge\.fromStatus\(view\.health\)/.test(overview))
 
-    // ② 目标正文走分档显示，不再无条件塞进「一句话结论」的强调块。
+    // ② 目标正文走查看器，不再在页面里展开。
     check('the overview uses the shared objective renderer', overview.includes('objectiveText(goal.objective)'))
     check('and the goal centre does too', source.includes('LZ.Format.objectiveText(goal.objective)'))
 
     const format = readFileSync(join(PLUGIN_ROOT, 'src', 'components', 'Format.js'), 'utf8')
     check('the renderer lives in the shared Format module', format.includes('function objectiveText('))
-    check('short objectives stay emphasised, long ones fold',
-      format.includes('const multiline = text.indexOf') && format.includes('objectiveRest'))
+    // 长正文**不在页面里展开**：展开＝页面里再套一层滚动框，两层滚动就是用户说的「断层」
+    // —— 滚轮滚谁看指针在哪，内容底部还会被外层容器切断。所以这里只出一个按钮。
+    check('a long objective hands off to the viewer instead of folding in place',
+      format.includes('data-viewer="objective"') && !format.includes('<details'),
+      '又在页面里套了折叠区')
     // 判据是**有没有结构**，不是有多长。第一版只按字数，探针抓出反例：一段 100 字、带换行的
     // 目标照样留在没有 pre-wrap 的强调块里，CSS 又把换行折叠掉 —— 长度是表象，换行才是会坏的那个。
-    check('and the fold triggers on structure, not only on length',
-      /multiline\s*\|\|/.test(format) || /if \(!multiline && text\.length <= 240\)/.test(format),
+    check('and the split triggers on structure, not only on length',
+      /if \(!multiline && text\.length <= 240\)/.test(format),
       '又只按字数判断了')
+    // 按钮要真的点得开：帧里有 openViewer，并且挂在那个已经委托的点击处理上。
+    check('the button opens the viewer',
+      source.includes('function openViewer(') && source.includes('openViewer: openViewer'))
+    check('and the click reaches it through the delegated handler',
+      source.includes('node.dataset.viewer !== undefined'))
 
     const css = readFileSync(join(PLUGIN_ROOT, 'src', 'styles', 'components.css'), 'utf8')
     // pre-wrap 是这条修复的核心：折叠了空白，几百行就糊成一坨。
-    check('the folded body preserves newlines', /\.objectiveFull\s*\{[^}]*white-space:\s*pre-wrap/.test(css))
-    check('and it scrolls instead of stretching the page', /\.objectiveFull\s*\{[^}]*max-height/.test(css))
+    check('the viewer body preserves newlines', /\.viewerText\s*\{[^}]*white-space:\s*pre-wrap/.test(css))
+    // 一屏里只有一层滚动：内容区自己滚，`min-height: 0` 让它真的收得下去 —— flex 子项的默认值
+    // 是 auto，少了这行它只撑高、不收缩，滚动就又跑回外层页面上去了。
+    check('and the dialog owns the only scroll layer',
+      /\.dialogContent\s*\{[^}]*overflow-y:\s*auto/.test(css) && /\.dialogContent\s*\{[^}]*min-height:\s*0/.test(css),
+      '又变成两层滚动了')
+    // 页面内那层折叠区的规则必须真的删掉 —— 留着就等于把断层留在 CSS 里等人用回去。
+    // 注释先剥掉：文件里**故意**留着一条「这里原本是折叠区」的说明，按整份文本查会读到它自己
+    // （和 native-dialog 那条断言同一个形状：断的是规则，不是散文）。
+    const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, '')
+    check('and the in-page fold is gone for good',
+      !cssRules.includes('.objectiveFull') && !cssRules.includes('.objectiveRest'))
   }
+
   // A proposal may only be adopted from the page, so the page must actually offer it.
   check('the page can adopt a proposal', source.includes('adoptProposal'))
   // The artifact write is opt-in, so the page must not enable it by itself.

@@ -559,7 +559,7 @@
     }
 
     document.addEventListener('click', function (event) {
-      const node = event.target.closest('[data-action], [data-tab]:not([role="tab"]), [data-window], [data-mode], [data-proposal], #goalArtifactOn, #goalArtifactOff, #goalArtifactWrite, #goalReconcile, #goalRawToggle, #goalRefresh, #goalRetry, #overviewRefresh, #overviewRetry, #runtimeRetry, #agentRetry, #agentGotoPreset, #systemRetry')
+      const node = event.target.closest('[data-action], [data-viewer], [data-tab]:not([role="tab"]), [data-window], [data-mode], [data-proposal], #goalArtifactOn, #goalArtifactOff, #goalArtifactWrite, #goalReconcile, #goalRawToggle, #goalRefresh, #goalRetry, #overviewRefresh, #overviewRetry, #runtimeRetry, #agentRetry, #agentGotoPreset, #systemRetry')
       if (node === null) return
 
       // 图表控件：只影响趋势图，纯前端，不发请求。
@@ -569,6 +569,16 @@
       // 提案：采纳与不采纳都是**人类操作**，走专门的 op。
       if (node.dataset.proposal !== undefined) {
         goalPost(node.dataset.proposalOp, { id: node.dataset.proposal })
+        return
+      }
+
+      // 查看器：把长内容放进一屏内可滚动的对话框，而不是在页面里再套一个滚动框。
+      //
+      // 「页面滚一层、内容再滚一层」就是断层感的来源 —— 滚轮到底滚谁要看指针在哪。
+      // 查看器脱离页面流，内部只有一层滚动。走的是帧内已有的对话框原语（纯 DOM、ESC、
+      // 遮罩、焦点归位都做过），所以这里只是把内容递进去。
+      if (node.dataset.viewer !== undefined) {
+        openViewer(node.dataset.viewer, node.dataset.viewerTitle)
         return
       }
 
@@ -754,6 +764,52 @@
     }
   })
 
+  /* ---------------------------------------------------------------- 查看器 */
+
+  /**
+   * 长内容查看器：一屏内滚动，脱离页面流。
+   *
+   * 为什么不是「页面上再套一个滚动框」：那是**两层滚动**——滚轮滚谁取决于指针在哪，
+   * 而内容底部会被外层容器的边界切断，读起来就是断层。查看器把它移出页面布局，
+   * 自己占一屏、内部只有一层滚动。
+   *
+   * 复用的是帧内已有的对话框原语（`LZ.Dialog`）——纯 DOM、ESC、遮罩、关闭后焦点归位
+   * 都已处理过（§5.22 那条「原生对话框偷焦点」的坑就在那里填的）。所以这里只负责
+   * **内容**：按类型从 pages 层取渲染好的 HTML。
+   *
+   * 内容按需取：一份几万字的正文没道理跟着每次渲染走。取不到就说取不到，不留白框。
+   *
+   * @param {string} kind - 查看什么：'objective' | 'raw'
+   * @param {string} [title]
+   */
+  function openViewer(kind, title) {
+    const labels = { objective: '目标全文', raw: 'goal.md 原文' }
+    const heading = title || labels[kind] || '查看'
+
+    const bodyFor = function () {
+      if (kind === 'objective') {
+        const goal = state.goal === null ? null : state.goal.goal
+        const text = goal === null || goal === undefined ? '' : String(goal.objective || '')
+        if (text === '') return '<p class="rowSub">（没有目标正文）</p>'
+        // pre-wrap：换行是原文的一部分（同 .viewerText）。
+        return '<div class="viewerText">' + LZ.Format.esc(text) + '</div>'
+      }
+      if (kind === 'raw') {
+        if (state.rawLoading) return '<p class="rowSub">正在读取…</p>'
+        if (state.rawText === null || state.rawText === '') return '<p class="rowSub">还没有 goal.md 原文。先在下方打开投影开关，或让 Agent 写一次。</p>'
+        return '<pre class="viewerPre">' + LZ.Format.esc(state.rawText) + '</pre>'
+      }
+      return '<p class="rowSub">不认识这种内容。</p>'
+    }
+
+    return LZ.Dialog.show({
+      title: heading,
+      content: bodyFor(),
+      cancelLabel: null,
+      confirmLabel: '关闭',
+    })
+  }
+
   /* ---------------------------------------------------------------- 对外接口 */
 
   LZ.App = {
@@ -763,6 +819,7 @@
     withSession: withSession,
     buildPageState: buildPageState,
     content: contentNode,
+    openViewer: openViewer,
     isRawOpen: function () { return state.rawOpen },
     rawState: function () { return { text: state.rawText, loading: state.rawLoading } },
     switchTab: switchTab,

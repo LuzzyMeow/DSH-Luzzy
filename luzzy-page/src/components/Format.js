@@ -49,15 +49,15 @@ function levelOf(v, max) {
 }
 
   /**
-   * 目标正文：短则强调显示，长则首段强调 + 其余进折叠区。
+   * 目标正文：短句强调显示，有结构则给一个**查看器按钮**。
    *
    * 为什么要分档：`objective` 通常是**一句话**（那 `.focusBox` 正合用），但用户可以把整份
    * 方案贴进去 —— 实测几万字。`.focusBox` 是 `font-lg` 的强调块、没有 `pre-wrap`，装一份
-   * 文档的结果是几百行被压成一个连续段落，`---`、`§`、列表全糊在一起（用户截图里就是）。
-   * **原语用错了**，不是样式没调好。
+   * 文档的结果是几百行被压成一个连续段落，`---`、`§`、列表全糊在一起。**原语用错了**。
    *
-   * 折叠用本仓已有的原生 `<details>` 惯例（`statusDetail`、`TreeView` 同款）——自带键盘
-   * 可达性与无障碍语义。折叠区保留 `pre-wrap`：换行是原文的一部分。
+   * 而且**不在页面里展开**：展开等于在页面上再套一层滚动框 —— 两层滚动就是用户说的「断层」
+   * （滚轮滚谁看指针在哪，内容底部还会被外层容器切断）。所以这里只出一个按钮，点开走
+   * `LZ.App.openViewer`：脱离页面流、占一屏、内部只有一层滚动。
    *
    * @param {string} objective
    * @returns {string}
@@ -76,10 +76,12 @@ function levelOf(v, max) {
 
     const breakAt = text.indexOf('\n')
     const head = (breakAt === -1 ? text.slice(0, 240) : text.slice(0, breakAt)).trim()
-    const rest = breakAt === -1 ? text.slice(240) : text.slice(breakAt + 1)
     return '<div class="focusBox">' + esc(head) + '</div>' +
-      '<details class="statusDetail objectiveRest"><summary>展开目标全文（' + text.length + ' 字）</summary>' +
-      '<div class="objectiveFull">' + esc(rest) + '</div></details>'
+      LZ.Card.btnBar([{
+        label: '查看目标全文（' + text.length + ' 字）',
+        variant: 'btnSmall',
+        attrs: 'data-viewer="objective" data-viewer-title="目标全文"',
+      }])
   }
 
   /** Series palette. Eight hues, then it cycles. */

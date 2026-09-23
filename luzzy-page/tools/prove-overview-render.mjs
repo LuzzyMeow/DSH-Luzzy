@@ -66,10 +66,11 @@ try {
     const sandbox = mkdtempSync(join(tmpdir(), 'luzzy-focus-proof-'))
     cpSync(PLUGIN_ROOT, sandbox, { recursive: true })
     sandboxes.push(sandbox)
-    // Drop pre-wrap: this is the single property that turned hundreds of lines into one blob.
+    // Drop pre-wrap from the viewer: this is the single property that turned hundreds of lines
+    // into one blob. It moved from the page to the viewer, so the arm moved with it.
     const css = join(sandbox, 'src', 'styles', 'components.css')
     const source = readFileSync(css, 'utf8')
-    const mutated = source.replace(/(\.objectiveFull\s*\{[^}]*?)white-space:\s*pre-wrap;/, '$1')
+    const mutated = source.replace(/(\.viewerText\s*\{[^}]*?)white-space:\s*pre-wrap;/, '$1')
     check('B: the mutation applied', mutated !== source, 'matched nothing')
     writeFileSync(css, mutated)
 
@@ -78,6 +79,33 @@ try {
     check('B: the suite goes red without pre-wrap', result.exitedNonZero, 'it passed with the collapse back')
     check(`B: and names the newline fix (${lines.length})`, lines.some((l) => /preserves newlines/.test(l)), lines.join(' | '))
     for (const line of lines.slice(0, 3)) console.log(`       ${line.trim()}`)
+  }
+
+  // ---- arm C: the in-page fold again -------------------------------------------
+  {
+    const sandbox = mkdtempSync(join(tmpdir(), 'luzzy-fold-proof-'))
+    cpSync(PLUGIN_ROOT, sandbox, { recursive: true })
+    sandboxes.push(sandbox)
+    // Put the nested scroll box back: the long objective expands inside the page instead of
+    // handing off. This is the defect the second screenshot showed, and it has THREE symptoms
+    // asserted separately — the fold itself, the missing handoff, and the resurrected CSS rule.
+    const format = join(sandbox, 'src', 'components', 'Format.js')
+    const source = readFileSync(format, 'utf8')
+    const mutated = source
+      .replace("data-viewer=\"objective\" data-viewer-title=\"目标全文\"", '')
+      .replace("'<div class=\"focusBox\">' + esc(head) + '</div>' +", "'<div class=\"focusBox\">' + esc(text) + '</div><details class=\"objectiveRest\"><div class=\"objectiveFull\">' + esc(text) + '</div></details>' +")
+    check('C: the mutation applied', mutated !== source && !mutated.includes('data-viewer'), 'matched nothing')
+    writeFileSync(format, mutated)
+    const cssFile = join(sandbox, 'src', 'styles', 'components.css')
+    const css = readFileSync(cssFile, 'utf8')
+    writeFileSync(cssFile, css + '\n.objectiveFull {\n  max-height: 22rem;\n  overflow-y: auto;\n  white-space: pre-wrap;\n}\n')
+
+    const result = runSuite(sandbox)
+    const lines = result.output.split('\n').filter((l) => l.includes('FAIL'))
+    check('C: the suite goes red with the in-page fold back', result.exitedNonZero, 'it passed with the nested scroll box')
+    check(`C: and names the handoff (${lines.length})`, lines.some((l) => /hands off to the viewer/.test(l)), lines.join(' | '))
+    check('C: and the resurrected rule', lines.some((l) => /in-page fold is gone/.test(l)), lines.join(' | '))
+    for (const line of lines.slice(0, 4)) console.log(`       ${line.trim()}`)
   }
 } finally {
   for (const sandbox of sandboxes) {

@@ -521,25 +521,12 @@ code, .mono {
   font-size: var(--lz-font-base);
 }
 
-/* ---- 目标全文（折叠区） ----
- * 目标正文可能是整份方案（几万字）。摘要走 .focusBox，其余进这里。
- * **pre-wrap 是这条修复的核心**：换行与缩进是原文的一部分，普通空白折叠会把
- * 几百行压成一个连续段落，`---`、`§`、列表全部糊在一起——用户截图里就是那个形状。
- * 字号回到正文档：这是要读的东西，不是要强调的结论。 */
-.objectiveRest {
-  margin-top: var(--lz-space-xs);
-}
-
-.objectiveFull {
-  max-height: 22rem;
-  overflow-y: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: var(--lz-font-sm);
-  line-height: var(--lz-line-height-sm);
-  color: var(--lz-text-secondary);
-  padding: var(--lz-space-sm) 0 0;
-}
+/* ---- 目标全文 ----
+ * 这里原本是 .objectiveRest / .objectiveFull：页面内一层「折叠区」，用自己的 max-height 滚。
+ * 那是**两层滚动**（页面一层、折叠区一层），滚轮滚谁看指针在哪，内容底部还会被外层容器切断
+ * —— 用户截图里的「断层」就是它。现在全文走查看器弹层（.dialogContent / .viewerText，见下），
+ * **一屏里只有一层滚动**，所以这两条规则连同那个折叠区一起删掉了。
+ * 别再把它加回来：在页面里展开长正文，等于把断层重新做一遍。 */
 
 /* 页面级状态块：整页只有一个，居中 */
 .status {
@@ -682,6 +669,43 @@ code, .mono {
   line-height: 1.65;
   color: var(--lz-text-secondary);
   overflow-wrap: anywhere;
+}
+
+/* ---- 查看器内容区 ----
+ * 一屏内滚动，**只有这一层**。外层 .dialog 的高度由这里决定，页面不再参与滚动，
+ * 所以不会出现「页面滚一层、内容再滚一层」的断层。
+ * 高度用 vh 而不是像素：窄屏或矮窗口下自动收，不会顶穿。 */
+.dialogContent {
+  flex: 1 1 auto;
+  min-height: 0;            /* flex 子项默认 min-height:auto，不加这行它不会收缩、只撑高 */
+  overflow-y: auto;
+  overscroll-behavior: contain;  /* 滚到底不要把滚动传给背后的页面 */
+  padding: var(--lz-space-sm) var(--lz-space-xxs) var(--lz-space-sm) 0;
+  border-top: 1px solid var(--lz-border);
+  margin-top: var(--lz-space-xxs);
+}
+
+.dialogContent:focus-visible { outline: 2px solid var(--lz-accent); outline-offset: 2px; }
+
+/* 原文：换行与缩进是内容的一部分，pre-wrap 不能省。 */
+.viewerText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text);
+}
+
+.viewerPre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* `--lz-mono` 是仓里已有的等宽 token。我第一版写的是 `--lz-font-mono` ——**那个不存在**，
+     用了会静默回退到硬编码兜底值（正是 §5.5 那条：token 名凭空写，不报错、只是不对）。 */
+  font-family: var(--lz-mono);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
+  color: var(--lz-text-secondary);
 }
 
 .dialogInput {
