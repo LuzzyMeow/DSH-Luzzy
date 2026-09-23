@@ -6,13 +6,21 @@
  * that never fires both leave every other suite green, and the只 difference is that the user's
  * 「每次对话都要执行状态链」 stopped happening.
  *
- * Four arms, because they fail independently:
+ * Six arms, because they fail independently:
  *
  *   armA  the chain gate never refuses            -> 「答完才放行」不再是门
  *   armB  the plugin notice counts as a new turn  -> 链在每个 step 自己续期
  *   armC  the pending flag is cleared optimistically in the gate
  *                                                 -> 一次**被拒**的 judgeChain 也算答过
  *   armD  the skill gate removed                  -> 「命中技能清单」只要说一句就行
+ *   armE  the skill gate blocks its own reading tools
+ *                                                 -> 逼模型为了让门放行而把 skillCheck 改成 none
+ *   armF  the turn filter narrowed back to `plugin`
+ *                                                 -> 宿主的 goal_state 注入被当成人在说话
+ *
+ * armE 与 armF 都是**实测出来的**，不是想出来的。同一个回合里连着被拦 5 次，其中 3 次是
+ * `read`（门的文本要求先读的正文），另外几次是宿主的 `<goal_state>` 注入被当成了新一轮。
+ * 合起来是两道自伤：一道逼人说假话，一道让门每步续期。
  *
  * Usage: node tools/prove-chain-gate.mjs
  */
@@ -93,16 +101,17 @@ try {
 
   // ---- arm B: our own notice counts as a new user turn ------------------------------
   //
-  // The filter is one line, and removing it is the shape of a plausible "simplification".
+  // The filter is two lines, and removing it is the shape of a plausible "simplification".
   // Without it every step re-arms the chain, so the model is asked the same question in a loop.
   {
     const sandbox = sandboxWith('B', (s) => s.replace(
-      "          if (message?.source?.kind === 'plugin') continue",
+      `          const kind = message?.source?.kind
+          if (kind !== undefined && kind !== 'user') continue`,
       '          // arm B: the filter is gone',
     ))
     sandboxes.push(sandbox)
     expectRed('B', sandbox, /not mistaken for a new turn|does not re-arm/i,
-      'it passed with the plugin-notice filter removed')
+      'it passed with the notice filter removed')
   }
 
   // ---- arm C: a refused judgement counts as an answer -------------------------------
@@ -123,7 +132,7 @@ try {
   // ---- arm D: 「命中技能清单」 becomes a sentence with no consequence -------------------
   {
     const sandbox = sandboxWith('D', (s) => s.replace(
-      `        if (chain.skillCheck === 'hit' && read.delivery.skills.length === 0) {
+      `        if (chain.skillCheck === 'hit' && read.delivery.skills.length === 0 && !SKILL_GATE_PASS_TOOLS.has(exec.name)) {
           stats.skillBlocked += 1
           entry.skillBlocks += 1
           return { kind: 'deny', reason: renderSkillGateRefusal(exec.name, entry) }
@@ -133,6 +142,35 @@ try {
     sandboxes.push(sandbox)
     expectRed('D', sandbox, /SKILL_LIST_EMPTY|skillBlocked|SKILL one/i,
       'it passed with the skill gate removed')
+  }
+
+  // ---- arm E: the skill gate blocks the reading tools it tells you to use --------------
+  //
+  // 把 `!SKILL_GATE_PASS_TOOLS.has(...)` 拿掉，就退回到那个死锁形态：门说「先读正文再登记」，
+  // 却把 read / skill 一起拦掉。这一臂钉住的是「门的指令与门的执行不矛盾」。
+  {
+    const sandbox = sandboxWith('E', (s) => s.replace(
+      ' && !SKILL_GATE_PASS_TOOLS.has(exec.name)) {',
+      ') {',
+    ))
+    sandboxes.push(sandbox)
+    expectRed('E', sandbox, /read passes through the skill gate|skill loader itself/i,
+      'it passed with the skill gate blocking the very tools that read a skill')
+  }
+
+  // ---- arm F: the filter is narrowed back to `plugin` ----------------------------------
+  //
+  // 这是**真实发生过的形态**，不是推演的变体：原来的过滤器只排除 `kind === 'plugin'`，
+  // 于是宿主的 `<goal_state>` 注入（同样是 user 角色）每来一次就被读成「用户又说了一句」。
+  // 实测后果：一个回合里连着被拦 5 次，每次都要重答两道分支，而人只说了一句话。
+  {
+    const sandbox = sandboxWith('F', (s) => s.replace(
+      "          if (kind !== undefined && kind !== 'user') continue",
+      "          if (kind === 'plugin') continue",
+    ))
+    sandboxes.push(sandbox)
+    expectRed('F', sandbox, /goal-state injection is not a new turn|workspace-instruction injection/i,
+      'it passed with only the plugin kind excluded (the shape of the real bug)')
   }
 } finally {
   for (const sandbox of sandboxes) {

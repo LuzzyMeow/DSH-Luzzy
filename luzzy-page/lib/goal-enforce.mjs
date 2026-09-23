@@ -213,6 +213,23 @@ export const GATE_PASS_TOOLS = Object.freeze(
 )
 
 /**
+ * Tools the SKILL gate (门 3) must let through, because they are how a skill gets READ.
+ *
+ * 门 3 的拒绝文本自己就写着「先把那份 skill 的完整正文读一遍，再用 activateSkill 登记」——
+ * 而门本身把 `read` / `glob` / `grep` / `skill` 一起拦掉了，于是那句话**无法执行**。
+ *
+ * 实测死锁（本会话真实发生，不是推演）：答了 `skillCheck: "hit"` 之后连着 4 次调用全被拒，
+ * 其中 3 次是 `read`（正是去读它要求的那份正文），1 次是 `skill`。模型唯一的出路是把
+ * `skillCheck` 改成 `"none"` —— 也就是**为了让门放行而说一句假话**。一个逼人说假话的门，
+ * 比没有门更糟：它把「登记」这个可核对的证据变成了一个必须撒谎才能开始的仪式。
+ *
+ * 所以这不是把门放宽，是让门的**指令**与门的**执行**不再互相矛盾。放过的只有「读」这一族：
+ * 写文件、跑命令、装东西仍然一律等到登记之后。门 3 本身在下一轮照样查 —— 读了不登记，
+ * 工具还是拿不到。
+ */
+export const SKILL_GATE_PASS_TOOLS = Object.freeze(new Set(['read', 'glob', 'grep', 'skill']))
+
+/**
  * Read one optional DSH service.
  *
  * `ctx.get(name)` rather than `ctx.name`: cordis' context proxy THROWS for a name the
@@ -736,7 +753,10 @@ export function renderSkillGateRefusal(toolName, entry) {
     '四项缺一不可 —— 缺任何一项，这条记录都答不出「为什么这一轮要用它」。',
     '登记的前提是**真的读完了那份 skill 的正文**：填不出来的那条就不要登记。',
     '',
-    '如果读完发现这一轮其实用不上，把 skillCheck 改成 "none" 也是一种答法。',
+    '**去读正文的工具是放行的**（read / glob / grep / skill）。这道门只为「读了没登记」而关，',
+    '不为「还没读」而关 —— 先读，再登记，顺序本来就是这样。',
+    '',
+    '如果读完之后确认这一轮其实用不上，把 skillCheck 改成 "none" 才是诚实的答法。',
   ]
   if (entry.skillBlocks >= 3) {
     lines.push('')
@@ -884,13 +904,31 @@ export function installEnforcement(ctx, deps) {
       // 保证，而「用户又说了一句」是一个确定的事实。拿消息 id 当轮次身份是安全的：id 由宿主铸造，
       // 一条没有 id 的消息会把整个会话写坏（§5.31），所以这个字段一定在。
       //
-      // 我们自己的注入也是 user 角色（`source.kind === 'plugin'`），必须排除。不排除的话，同一条
-      // 用户消息会在下一个 step 被认成新的一轮，链就会自己一直重新置位 —— 一个自己给自己续期的门。
+      // **只有「人说的话」才算一轮。** 判据不是「role === 'user'」—— 宿主往对话里插的东西
+      // 有一大半也是 user 角色：
+      //
+      //   source.kind = user              人在键盘上打的                ← 只有这个是「一轮」
+      //   source.kind = plugin            本插件自己的注入
+      //   source.kind = goal              宿主的 <goal_state> 注入
+      //   source.kind = agent-instructions  工作区规范文件的注入
+      //   source.kind = session-reference / team-message / tool / model
+      //
+      // 这是宿主给每条消息盖的来源章（`dsh-session-format` 的 messageSourceValue 逐个校验），
+      // 所以按它判是**确定性的**，不是启发式。
+      //
+      // 原来只排除 `plugin`，于是宿主的每一个 <goal_state> 注入都被认成「用户又说了一句」：
+      // 链在同一个回合里自己给自己续期。实测（本会话）：一个回合里连着被拦 5 次，每次都得把
+      // 两道分支重答一遍 —— 而那 5 次里人只说了一句话。用户接受的是「每轮答一次」，不是
+      // 「每次注入答一次」。
+      //
+      // 没有 source 的消息**保留成候选**：认不出来的时候宁可多问一次，也不要让门悄悄失效 ——
+      // 「门不再触发」是这套设计里唯一在页面上看不出来的失败。
       const turnOwnerId = (() => {
         for (let i = decision.messages.length - 1; i >= 0; i -= 1) {
           const message = decision.messages[i]
           if (message?.role !== 'user') continue
-          if (message?.source?.kind === 'plugin') continue
+          const kind = message?.source?.kind
+          if (kind !== undefined && kind !== 'user') continue
           if (typeof message.id === 'string') return message.id
         }
         return null
@@ -1152,7 +1190,9 @@ export function installEnforcement(ctx, deps) {
         //
         // 「必须有这个判断，不然直接锁工具」在这里的下半句是：**判断成命中之后，登记也要真的
         // 发生**。否则 skillCheck="hit" 就是一句无法核对的话，而它的全部价值就在于可核对。
-        if (chain.skillCheck === 'hit' && read.delivery.skills.length === 0) {
+        // 读正文的那一族必须过门 —— 否则「先读再登记」这句话在这道门底下根本做不到。
+        // 见 `SKILL_GATE_PASS_TOOLS` 的注释：那是一次实测到的死锁，不是理论风险。
+        if (chain.skillCheck === 'hit' && read.delivery.skills.length === 0 && !SKILL_GATE_PASS_TOOLS.has(exec.name)) {
           stats.skillBlocked += 1
           entry.skillBlocks += 1
           return { kind: 'deny', reason: renderSkillGateRefusal(exec.name, entry) }

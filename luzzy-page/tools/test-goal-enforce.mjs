@@ -1359,6 +1359,35 @@ try {
       { kind: 'enter', messages: [{ role: 'user', id: 'msg-1', content: '继续' }, pluginNotice] })
     eq('and our own injected notice is not mistaken for a new turn', enforce.readCounters(sessionId).chainPending, false)
 
+    // 宿主的 `<goal_state>` 注入**同样是 user 角色，而且每轮都插**。它必须不算新一轮。
+    //
+    // 这条是**实测出来的**：本会话一个回合里连着被拦 5 次，每次都得把两道分支重答一遍，
+    // 而人只说了一句话。根因就是原来的过滤器只认 `kind === 'plugin'`，于是宿主的目标状态
+    // 注入每来一次就被读成「用户又说了一句」，链在同一个回合里自己给自己续期。
+    //
+    // 来源章是宿主逐个校验的字段（`dsh-session-format` 的 messageSourceValue 里 user /
+    // plugin / model / tool / agent-instructions / session-reference 各有各的校验），
+    // 所以按 `source.kind` 判是**确定性的**，不是启发式。
+    const goalState = {
+      role: 'user', id: 'gs-1', source: { kind: 'goal' },
+      content: [{ type: 'text', text: '<goal_state>{}</goal_state>' }],
+    }
+    await fire(ctx, 'agent/pre-step', { agent, messages: [], turn: 1, step: 4, signal: {} },
+      { kind: 'enter', messages: [{ role: 'user', id: 'msg-1', content: '继续' }, goalState] })
+    eq('and the harness goal-state injection is not a new turn either',
+      enforce.readCounters(sessionId).chainPending, false)
+
+    // 工作区规范文件的注入是同一个形状（`agent-instructions`），一起钉住 —— 少钉一个，
+    // 下一个「宿主又加了一种注入」就会以同样的方式把门变成每步一次。
+    const instructions = {
+      role: 'user', id: 'ai-1', source: { kind: 'agent-instructions' },
+      content: [{ type: 'text', text: '# AGENTS.md' }],
+    }
+    await fire(ctx, 'agent/pre-step', { agent, messages: [], turn: 1, step: 5, signal: {} },
+      { kind: 'enter', messages: [{ role: 'user', id: 'msg-1', content: '继续' }, instructions] })
+    eq('and neither is a workspace-instruction injection',
+      enforce.readCounters(sessionId).chainPending, false)
+
     await openTurn('msg-2', 4)
     eq('a NEW user message re-arms it', enforce.readCounters(sessionId).chainPending, true)
     eq('and the gate holds the next turn too', (await attempt()).kind, 'deny')
@@ -1429,6 +1458,21 @@ try {
     const exit = await fire(ctx, 'tools/pre-execute',
       { name: 'goal_delivery', arguments: { action: 'activateSkill' }, agent }, { kind: 'allow' })
     eq('activateSkill passes through the gate', exit.kind, 'allow')
+
+    // 读正文的那一族也必须能过 —— 这是**实测出来的死锁**，不是理论风险。
+    //
+    // 门 3 自己的拒绝文本写着「先把那份 skill 的完整正文读一遍，再用 activateSkill 登记」，
+    // 而门本身把 read / glob / grep / skill 拦掉了，于是那句话在门后没有执行路径。本会话的
+    // 真实记录：答了 skillCheck="hit" 之后连着 4 次调用被拒，其中 3 次是 `read`（正是去读
+    // 它要求的那份正文），1 次是 `skill`。模型唯一的出路是把 skillCheck 改成 "none" ——
+    // 也就是**为了让门放行而说一句假话**。
+    //
+    // 所以这三条断言钉住的是「门的指令与门的执行不互相矛盾」：读的过，写的不过。
+    eq('read passes through the skill gate', (await fire(ctx, 'tools/pre-execute',
+      { name: 'read', arguments: { file_path: 'x' }, agent }, { kind: 'allow' })).kind, 'allow')
+    eq('and so does the skill loader itself', (await fire(ctx, 'tools/pre-execute',
+      { name: 'skill', arguments: { name: 'x' }, agent }, { kind: 'allow' })).kind, 'allow')
+    eq('but an ordinary work tool is still held', (await attempt()).kind, 'deny')
 
     // 登记之后放行（走真实的状态写入，而不是把门短路）。
     const written = chain.persist((d) => domain.applyDeliveryOp(d, 'activateSkill',
