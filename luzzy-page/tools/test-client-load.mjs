@@ -833,6 +833,99 @@ if (entry) {
   check('frame defines no React hooks', !/\buseState\(|\buseEffect\(/.test(source))
 }
 
+  // ------------------------------------------------- 控制台取数：切页即时、刷新不闪
+  //
+  // 用户报的原文：「每次进入控制台，或在正在对话时，都要重新读取或强制刷新，改成异步读取刷新…
+  // 点进某一个子页面时，当前子页面直接静态不刷新，然后其他子页面在刷新数据…避免用户交互断层」。
+  //
+  // 缺陷的形状是：定时器每 15 秒调一次 `loadGoal(true)`，而 force 让 loader 把状态打回加载中
+  // → 整页翻成骨架。一次「什么都没变」的刷新，用户看到的是一次中断。
+  //
+  // 这几条断的是一个**顺序**和一组**守卫**：加载态必须先被 `background` 挡住，失败必须先被
+  // `background` 挡住，切页必须先画再取。少任何一条，症状都会回来，而且都不会报错。
+  {
+    // 断在**作者源码**上，不断在构建产物上。
+    //
+    // 第一版断的是 `lib/client.js`，七条里有七条红 —— 而产品其实是对的：帧文档在那个产物里是
+    // 一个 **JSON 字符串字面量**，换行是两字符的 `\n`、非 ASCII 是 `\uXXXX`，于是
+    // `\s*` 跨不过它、`includes('下面这份是上一次的快照')` 永远为假。
+    // 「量具读错了东西，却报成产品坏了」——和本轮早些时候那次同型，所以这里连判据一起换掉。
+    const appSrc = readFileSync(join(PLUGIN_ROOT, 'src', 'app', 'app.js'), 'utf8')
+
+    check('the goal loader takes a background flag', /function loadGoal\(force, quiet\)/.test(appSrc))
+    check('and so does the runtime loader', /function loadRuntime\(force, quiet\)/.test(appSrc))
+    check('and the preset loader', /function loadPreset\(force, quiet\)/.test(appSrc))
+
+    // 三条一模一样的守卫，每条各自能失效：有数据在屏上时，不把状态打回加载中。
+    check('a background reload does not flip the page into loading',
+      (appSrc.match(/const background = quiet === true && state\.(goal|runtime|preset)Status === 'ready'/g) || []).length === 3,
+      '后台刷新的守卫没了，定时刷新会把整页翻成骨架')
+
+    // 后台失败**不能**拿错误页盖掉屏幕上已经有的数据 —— 那是把「这次没更新成」说成「读不到」。
+    check('a failed background reload keeps what is on screen',
+      (appSrc.match(/if \(background\) return/g) || []).length >= 3,
+      '后台失败会把一屏好好的数据换成错误页')
+
+    // 便宜的三份**一律**走后台模式：定时刷新、顺手补读、手动刷新、重试，一条都不许例外。
+    // 用量不在其中 —— 它重，且它的重试本来就在系统信息页里。
+    //
+    // 先剥注释再查，且这是**必须**的：文件里有一条说明写的就是「原来这里只调 loadGoal(true)…」，
+    // 按整份文本查会读到它自己 —— 同 `.objectiveFull` 那条断言的形状：断的是规则，不是散文。
+    const appCode = appSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+    check('every cheap reload goes through background mode',
+      !/load(Goal|Runtime|Preset)\(true\)/.test(appCode),
+      '还有 force 调用没走后台模式')
+
+    // 补读别的页时**绝不能**顺手刷用量：那是一次 220 MB 的日志扫描，
+    // 而它的症状是「磁盘一直在响」，不是一个看得见的错误。
+    const refreshOthersBody = appSrc.slice(appSrc.indexOf('function refreshOthers('), appSrc.indexOf('function refreshOthers(') + 900)
+    check('refreshOthers exists', appSrc.includes('function refreshOthers('))
+    check('and it never touches the usage scan', !refreshOthersBody.includes('loadUsage'))
+    check('and it skips what ensureFor already asked for', refreshOthersBody.includes('ensured.includes('))
+
+    // 切页：先画，再去取。中间不许有任何「先打回加载中」的步骤。
+    check('switching a tab paints BEFORE it fetches',
+      /state\.rawOpen = false[\s\S]{0,900}?render\(\)[\s\S]{0,600}?ensureFor\(next\)/.test(appSrc),
+      '切页的顺序变了，一进去就会先闪一下加载态')
+    check('and the switch also tops up the other pages',
+      /ensureFor\(next\)[\s\S]{0,600}?refreshOthers\(next\)/.test(appSrc))
+
+    // 快照缓存：只为了第一帧不为空，而且必须按会话分键 —— 拿 A 会话的目标画 B 会话的页面，
+    // 是这个插件已经修过一次的事故。
+    check('the snapshot cache is keyed by session', /CACHE_PREFIX \+ sessionId \+ ':' \+ name/.test(appSrc))
+    check('and it refuses to work without a session',
+      /function cacheGet\(name\) \{[\s\S]{0,80}?if \(sessionId === null\) return null/.test(appSrc))
+    check('and a broken cache degrades to no-cache, never to a broken page',
+      /catch \(error\) \{[\s\S]{0,40}?return null/.test(appSrc) && appSrc.includes('cache-put-failed'))
+    check('and the cache is never a second source of truth',
+      /不是第二份状态源/.test(appSrc))
+
+    // 旧快照可以显示，但**必须挂标记**。安静地冒充新数据是这个项目最重的一类错误。
+    check('the cached paint raises a marker', /state\.showingCache = true/.test(appSrc))
+    check('and the marker is a visible banner', appSrc.includes('function staleBanner()'))
+    check('and the banner says it is a snapshot, not the current data', appSrc.includes('下面这份是上一次的快照'))
+    check('and the banner only shows while the cache is on screen',
+      /if \(state\.showingCache !== true\) return ''/.test(appSrc))
+    check('and the marker is cleared when this page\'s own loaders land',
+      /Promise\.resolve\(ensureFor\(state\.tab\)\)\.then\(function \(\) \{[\s\S]{0,120}?state\.showingCache = false/.test(appSrc))
+    check('and the banner is prepended to whatever the page rendered',
+      appSrc.includes('staleBanner() + html'))
+
+    // 源码对了不等于产物里有它。构建产物这一层只查 ASCII 的标识符 —— 非 ASCII 在那个文件里
+    // 是 `\uXXXX`，查中文只会得到一个假的「没发出去」。
+    check('the new code is really in the shipped bundle',
+      source.includes('function staleBanner(') && source.includes('staleBar'))
+
+    // 「一块表面只能有一层」：横幅坐在玻璃卡片上面，它自己不能再是一层玻璃。
+    const layoutCss = readFileSync(join(PLUGIN_ROOT, 'src', 'styles', 'layout.css'), 'utf8')
+    const staleRule = layoutCss.slice(layoutCss.indexOf('.staleBar {'))
+    const staleBlock = staleRule.slice(0, staleRule.indexOf('}'))
+    check('the banner is styled', staleBlock.length > 0 && staleBlock.includes('--lz-state-waiting'))
+    check('and it is NOT a second layer of glass',
+      !staleBlock.includes('backdrop-filter') && !staleBlock.includes('background:'),
+      '横幅自己成了第二层玻璃，字会沉下去')
+  }
+
 // ---------------------------------------------------------------- report
 
 console.log(notes.join('\n'))

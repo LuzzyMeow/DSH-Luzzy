@@ -253,6 +253,20 @@ button:focus-visible,
 
 .noticeBar span[hidden] { display: none; }
 
+/* 快照横幅：「现在屏上这份是上一次的快照」。
+ *
+ * 刻意**不做成玻璃**：它坐在内容列的最上面，而它下面的卡片已经是玻璃了。一层玻璃压在
+ * 另一层玻璃上，字先沉下去 —— 一块表面只能有一层（同 .callout 那条）。
+ * 一行次级文字 + 一条等待色的左边线就够了，它要说明的是状态，不是抢注意力。 */
+.staleBar {
+  margin-bottom: var(--lz-space-base);
+  padding: var(--lz-space-xs) var(--lz-space-sm);
+  border-left: 3px solid var(--lz-state-waiting);
+  border-radius: var(--lz-radius);
+  color: var(--lz-text-secondary);
+  font-size: var(--lz-font-sm);
+}
+
 /* ---------------------------------------------------------------- 响应式
  *
  * 窄屏收的是**内边距**，不是列宽——设计系统要求主内容居中、留白随断点增长。

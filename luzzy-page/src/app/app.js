@@ -72,6 +72,10 @@
     rawOpen: false,
     rawText: null,
     rawLoading: false,
+
+    // 现在屏幕上的东西有多少是从上一次的快照画出来的。为真时页顶挂一条 `staleBar`——
+    // 旧数据可以显示，但不能不挂标记地冒充新数据。
+    showingCache: false,
   }
 
   const content = document.getElementById('content')
@@ -263,6 +267,19 @@
 
   /* ---------------------------------------------------------------- 渲染 */
 
+  /**
+   * 「现在屏幕上的东西是上一次的快照」——**必须挂出来**。
+   *
+   * 旧快照安静地冒充新数据，和「宿主半版本不一致却显示『你没有数据』」是同一类错误：它对
+   * 用户的事实陈述是错的，而且没有任何地方会报错。这一条横幅就是那次事故留下的规矩。
+   *
+   * 一行 HTML，不参与页面模块的渲染 —— 页面模块不该知道缓存这回事。
+   */
+  function staleBanner() {
+    if (state.showingCache !== true) return ''
+    return '<div class="staleBar" role="status">正在读取控制台的最新数据… 下面这份是上一次的快照。</div>'
+  }
+
   function render() {
     if (tabbar !== null) tabbar.innerHTML = LZ.Router.tabBar(state.tab)
     if (content === null) return
@@ -289,7 +306,7 @@
     // nothing, because it attaches its listeners in the same pass and needs the DOM to exist
     // first. `undefined` therefore means "already painted" — assigning it would put the literal
     // string "undefined" on the page, which is exactly what happened before this guard existed.
-    if (html !== undefined) content.innerHTML = html
+    if (html !== undefined) content.innerHTML = staleBanner() + html
 
     // Chart interaction is attached after the markup exists (it is built as a string).
     // The animation attribute is retired by a timer — NOT animationend, because under
@@ -327,6 +344,67 @@
    */
   let sessionGeneration = 0
 
+  /* ---------------------------------------------------------------- 快照缓存
+   *
+   * 帧是独立文档：关掉再打开就是一次全新的执行，内存里的东西一个都不剩。所以「点开控制台先
+   * 看到一屏骨架」不是加载慢，是**上一份数据被丢掉了**。
+   *
+   * 这是**显示缓存**，不是第二份状态源：它只用来画第一帧，真实数据一到就整体覆盖，而且键里
+   * 带着会话 id —— 拿 A 会话的目标去画 B 会话的页面，是这个插件已经修过一次的事故
+   * （见 `sessionGeneration` 那段）。
+   *
+   * 关键约束：**画了缓存就必须承认画的是缓存**。旧快照不挂标记地冒充新数据，和
+   * 「宿主半版本不一致却显示『你没有数据』」是同一类错误 —— 它对用户的事实陈述是错的。
+   * 所以每一份从缓存画出来的页面都带一条 `staleBar`，直到这一页的真实数据落地才摘掉。
+   */
+  const CACHE_PREFIX = 'luzzy.snapshot.v1:'
+
+  function cachePut(name, body) {
+    if (sessionId === null) return
+    try {
+      sessionStorage.setItem(CACHE_PREFIX + sessionId + ':' + name, JSON.stringify(body))
+    } catch (error) {
+      // 配额满、或浏览器禁了 sessionStorage：缓存是优化，失败必须退化成「没有缓存」，
+      // 绝不能退化成「页面坏了」。
+      report('cache-put-failed', String(error && error.message || error))
+    }
+  }
+
+  function cacheGet(name) {
+    if (sessionId === null) return null
+    try {
+      const raw = sessionStorage.getItem(CACHE_PREFIX + sessionId + ':' + name)
+      if (raw === null || raw === '') return null
+      return JSON.parse(raw)
+    } catch (error) {
+      return null
+    }
+  }
+
+  /**
+   * 一屏缓存能省掉的东西，值得在**还不知道用户要看哪一页**的时候就先摆上来。
+   *
+   * 只碰便宜的三份（目标 / 执行状态 / Agent 配置）。用量**不在里面** —— 它是一次 220 MB
+   * 的日志扫描，只该在真的站在系统信息页时开始。把它塞进「顺手」里最省事，症状却是
+   * 「磁盘一直在响」而不是「页面坏了」，很难被归因回来。
+   */
+  function paintFromCache() {
+    const goal = cacheGet('goal')
+    const runtime = cacheGet('runtime')
+    const preset = cacheGet('preset')
+    if (goal === null && runtime === null && preset === null) return false
+    if (goal !== null) { state.goal = goal; state.goalStatus = 'ready'; state.capabilities = goal.capabilities || null }
+    if (runtime !== null) {
+      state.runtime = runtime
+      state.runtimeStatus = 'ready'
+      if (typeof runtime.version === 'string' && runtime.version !== '') state.version = runtime.version
+    }
+    if (preset !== null) { state.preset = preset; state.presetStatus = 'ready' }
+    state.showingCache = true
+    report('painted-from-cache', { goal: goal !== null, runtime: runtime !== null, preset: preset !== null })
+    return true
+  }
+
   /**
    * 取数该不该现在开始。
    *
@@ -340,12 +418,20 @@
     return status !== 'ready' && status !== 'loading'
   }
 
-  function loadGoal(force) {
+  function loadGoal(force, quiet) {
     if (!shouldLoad(state.goalStatus, force)) return Promise.resolve()
+    // 后台刷新：屏幕上已经有一份可看的数据时，**不动它**。
+    //
+    // 把状态打回加载中会让整页翻成骨架，而这一次请求的结果通常和上一份一模一样 ——
+    // 用户看到的是一次白白的中断。定时刷新与「顺手补读别的页」全部走这条路径，
+    // 所以它同时修掉了「正在对话时页面每 15 秒闪一次」。
+    const background = quiet === true && state.goalStatus === 'ready'
+    if (!background) {
+      state.goalStatus = 'loading'
+      state.goalDetail = null
+      render()
+    }
     const generation = sessionGeneration
-    state.goalStatus = 'loading'
-    state.goalDetail = null
-    render()
     report('goal-fetch-start', null)
     return getJson(withSession('/__luzzy/goal')).then(function (result) {
       // 迟到的响应：会话已经换过了，这份数据描述的不是当前会话。
@@ -355,6 +441,9 @@
       }
       if (!result.ok) {
         report('goal-fetch-failed', result.error)
+        // 后台失败**不能**把屏幕上的数据换成错误页：那等于把「这次没更新成」说成「读不到」。
+        // 前台的失败照旧切错误态 —— 那时屏幕上本来就没有东西可保护。
+        if (background) return
         state.goalStatus = 'error'
         state.goalDetail = result.error
         render()
@@ -367,15 +456,19 @@
       state.goalDetail = null
       // 系统信息页要用到能力探测，顺手带上。
       state.capabilities = result.body.capabilities || null
+      cachePut('goal', result.body)
       render()
     })
   }
 
-  function loadRuntime(force) {
+  function loadRuntime(force, quiet) {
     if (!shouldLoad(state.runtimeStatus, force)) return Promise.resolve()
-    state.runtimeStatus = 'loading'
-    state.runtimeDetail = null
-    render()
+    const background = quiet === true && state.runtimeStatus === 'ready'
+    if (!background) {
+      state.runtimeStatus = 'loading'
+      state.runtimeDetail = null
+      render()
+    }
     report('runtime-fetch-start', null)
     return getJson(withSession('/__luzzy/runtime'), 30000).then(function (result) {
       // A route that could not BUILD a snapshot still answers 200 with `ok:false` and a version —
@@ -387,6 +480,7 @@
       }
       if (!result.ok) {
         report('runtime-fetch-failed', result.error)
+        if (background) return
         state.runtimeStatus = 'error'
         state.runtimeDetail = result.error
         render()
@@ -395,17 +489,22 @@
       state.runtime = result.body
       state.runtimeStatus = 'ready'
       state.runtimeDetail = null
+      cachePut('runtime', result.body)
       render()
     })
   }
 
-  function loadPreset(force) {
+  function loadPreset(force, quiet) {
     if (!shouldLoad(state.presetStatus, force)) return Promise.resolve()
-    state.presetStatus = 'loading'
-    state.presetDetail = null
-    render()
+    const background = quiet === true && state.presetStatus === 'ready'
+    if (!background) {
+      state.presetStatus = 'loading'
+      state.presetDetail = null
+      render()
+    }
     return getJson(withSession('/__luzzy/preset'), 30000).then(function (result) {
       if (!result.ok) {
+        if (background) return
         state.presetStatus = 'error'
         state.presetDetail = result.error
         render()
@@ -414,6 +513,7 @@
       state.preset = result.body
       state.presetStatus = 'ready'
       state.presetDetail = null
+      cachePut('preset', result.body)
       render()
     })
   }
@@ -508,12 +608,34 @@
     return goalActive || runtimeActive
   }
 
+  /**
+   * 在别的页上时，把这一页用不到的那几份顺手刷一遍，让「切过去」是**已经有数据**而不是
+   * 「等一下」。
+   *
+   * 已经由 `ensureFor` 要过的**不重复要**：`force` 会压过「正在取」，补一次就是同一份数据
+   * 发两次请求 —— 而那正是最费的那一份最容易发生的事。
+   *
+   * 用量依然不在名单里，理由同上（220 MB 扫描）。
+   */
+  function refreshOthers(tab) {
+    const ensured =
+      tab === 'goal' ? ['goal', 'runtime', 'preset'] :
+      tab === 'system' ? ['goal', 'runtime'] :
+      tab === 'preset' ? ['preset'] :
+      ['readme']
+    if (!ensured.includes('goal')) loadGoal(true, true)
+    if (!ensured.includes('runtime')) loadRuntime(true, true)
+    if (!ensured.includes('preset')) loadPreset(true, true)
+  }
+
   function scheduleRefresh() {
     if (refreshTimer !== null) return
     refreshTimer = setInterval(function () {
       if (!shouldRefresh()) return
-      if (state.tab === 'goal') { loadGoal(true); loadRuntime(true); loadPreset(true) }
-      else if (state.tab === 'system') { loadRuntime(true); loadGoal(true) }
+      // 全部走后台模式：定时刷新只该换掉数据，不该把用户正在看的东西换成一屏骨架。
+      if (state.tab === 'goal') { loadGoal(true, true); loadRuntime(true, true); loadPreset(true, true) }
+      else if (state.tab === 'system') { loadRuntime(true, true); loadGoal(true, true) }
+      refreshOthers(state.tab)
     }, 15000)
   }
 
@@ -525,8 +647,12 @@
     // 折叠状态是页面局部的，切页时复位——否则从目标中心带着展开的 goal.md 走到别的页，
     // 再回来时它还是展开的，而用户并不记得自己展过它。
     state.rawOpen = false
+    // 先画，再去取。屏幕上已经有的数据这一帧就能看见，不经过任何中间态——这一条就是
+    // 「点过去可直接查看」：切页本身**从不**把页面打回加载中。
     render()
     ensureFor(next)
+    // 然后才去补别的页的数据，让下一次切页也是即时的。
+    refreshOthers(next)
   }
 
   /** 事件委托：整个内容区一个监听器，页面上任何一个按钮都不必自己绑。 */
@@ -574,14 +700,17 @@
       }
 
       switch (node.id) {
-        case 'goalRefresh': loadGoal(true); return
-        case 'goalRetry': loadGoal(true); return
+        // 手动刷新 / 重试也走后台模式。这里**不需要**额外判断「屏幕有没有数据」——
+        // `background` 的定义就是「状态已经是 ready」，所以有数据时它保住数据，
+        // 没数据时（第一次进来、或上一次失败）它照旧走加载态与错误态。一个开关两种情况都对。
+        case 'goalRefresh': loadGoal(true, true); return
+        case 'goalRetry': loadGoal(true, true); return
         // 执行状态与 Agent 配置折进目标中心之后，它们的重试按钮落在这里。
         // 两个都同时重取目标：Agent 配置的「工具能力」一块来自执行状态，
         // 而目标的读数会跟着刷新——只重取一半会让页面上两块内容来自两个时刻。
-        case 'runtimeRetry': Promise.all([loadRuntime(true), loadGoal(true)]); return
-        case 'agentRetry': Promise.all([loadPreset(true), loadRuntime(true), loadGoal(true)]); return
-        case 'systemRetry': Promise.all([loadUsage(true), loadRuntime(true)]); return
+        case 'runtimeRetry': Promise.all([loadRuntime(true, true), loadGoal(true, true)]); return
+        case 'agentRetry': Promise.all([loadPreset(true, true), loadRuntime(true, true), loadGoal(true, true)]); return
+        case 'systemRetry': Promise.all([loadUsage(true), loadRuntime(true, true)]); return
         case 'agentGotoPreset': switchTab('preset'); return
         case 'agentNewSession': createSession(); return
         case 'goalArtifactOn': goalPost('enableArtifact'); return
@@ -745,8 +874,18 @@
       state.runtimeStatus = 'idle'
       state.presetStatus = 'idle'
       state.usageStatus = 'idle'
+      state.showingCache = false
+      // 上一次打开控制台读到的那一份先摆上来——屏幕立刻有东西可看，不再是一屏骨架。
+      // 缓存按 sessionId 分键，所以这里读到的必然是这个会话自己的快照，不是上一个会话的。
+      paintFromCache()
       render()
-      ensureFor(state.tab)
+      // 真实数据一到就摘掉缓存标记。注意摘标记这件事**必须由这一页自己的 loader 决定何时做完**，
+      // 而不是定个延时 —— 延时会在慢机器上提前摘掉，让旧数据冒充新数据。
+      Promise.resolve(ensureFor(state.tab)).then(function () {
+        if (!state.showingCache) return
+        state.showingCache = false
+        render()
+      })
       return
     }
     if (data.type === 'session-created') {
