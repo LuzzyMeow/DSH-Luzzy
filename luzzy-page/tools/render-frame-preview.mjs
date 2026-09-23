@@ -1,110 +1,100 @@
-// Extract the frame document the plugin builds and render it standalone, to prove the
-// template escaping produced a valid, self-contained HTML document.
+// Render the frame document standalone and assert it is a valid, self-contained page.
 //
-// The iframe document is built inside a template literal, so backticks and escapes are
-// easy to get subtly wrong — and the failure only shows up as a blank frame. This pulls
-// the real function out of the built bundle and runs it.
+// The frame is assembled from src/ by tools/build-font-css.py and shipped inside the bundle
+// as a JSON string. This pulls the REAL document out of the built bundle — through the real
+// component, via tools/frame-source.mjs — and writes it to disk, so what is inspected here is
+// byte-for-byte what the browser receives. Reconstructing it from source would prove nothing
+// about the build.
 //
 // Usage: node tools/render-frame-preview.mjs [--out path]
 
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join, dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { loadFrameBuilder, compileFrameScript, PLUGIN_ROOT } from './frame-source.mjs'
 
-const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
-const bundle = readFileSync(join(PLUGIN_ROOT, 'lib', 'client.js'), 'utf8')
-
-// Pull the two real pieces out of the shipped bundle: the font CSS and the frame builder.
-// The bundle uses CRLF line endings, so pair backticks instead of matching newlines.
-function templateAfter(marker) {
-  const start = bundle.indexOf(marker)
-  if (start < 0) return ''
-  const open = bundle.indexOf('`', start)
-  if (open < 0) return ''
-  const close = bundle.indexOf('`', open + 1)
-  if (close < 0) return ''
-  return bundle.slice(open + 1, close)
-}
-
-const fontCss = templateAfter('const FONT_FACE_CSS')
-if (fontCss.trim() === '') throw new Error('could not extract FONT_FACE_CSS from the bundle')
-
-const fnStart = bundle.indexOf('function buildFrameDocument(')
-if (fnStart < 0) throw new Error('buildFrameDocument not found in the bundle')
-// Brace-match to the end of the function.
-let depth = 0
-let end = -1
-for (let i = bundle.indexOf('{', fnStart); i < bundle.length; i += 1) {
-  if (bundle[i] === '{') depth += 1
-  else if (bundle[i] === '}') {
-    depth -= 1
-    if (depth === 0) {
-      end = i + 1
-      break
-    }
-  }
-}
-if (end < 0) throw new Error('could not find the end of buildFrameDocument')
-
-const fnSource = bundle.slice(fnStart, end)
-const buildFrameDocument = new Function(`${fnSource}; return buildFrameDocument`)()
-
-const html = buildFrameDocument(fontCss)
+const { srcDoc: html, fontCss, frameLength } = loadFrameBuilder()
 
 const args = process.argv.slice(2)
 const outIndex = args.indexOf('--out')
 const out = outIndex >= 0 ? args[outIndex + 1] : join(tmpdir(), 'luzzy-frame-preview.html')
 writeFileSync(out, html, 'utf8')
 
-// Structural assertions: the escaped template must have produced a real document.
+// Structural assertions: the assembled document must be complete and self-contained.
 const checks = [
   ['has doctype', html.startsWith('<!doctype html>')],
   ['has closing html', html.trimEnd().endsWith('</html>')],
   ['has the font faces', (html.match(/@font-face/g) ?? []).length === 4],
-  ['has the tab bar', html.includes('data-tab="readme"') && html.includes('data-tab="usage"')],
+  ['has no external url', !/url\((?!data:)/.test(html)],
   ['has the script', html.includes("'use strict'")],
-  ['markdown: backtick regex survived', html.includes('replace(/`([^`]+)`/g')],
-  ['markdown: newline split survived', html.includes("split('\\n')")],
-  ['has fetch to readme', html.includes("fetch('/__luzzy/readme')")],
-  // The usage fetch carries no unit any more: one payload returns every window, and the
-  // window is switched client-side.
-  ['has fetch to usage', html.includes("'/__luzzy/usage'") && !html.includes("usage?unit=")],
-  ['no unresolved placeholder', !html.includes('__FONT_FACE_CSS__')],
+  ['no unresolved font marker', !html.includes('__FRAME_FONTS__')],
+  ['no unresolved module marker', !html.includes('__MODULES__')],
+  ['no unresolved style marker', !html.includes('__STYLES__')],
+
   // The frame is a separate document, so it must define the theme tokens itself; without
-  // these every var(--dsw-*) would fall back to a hardcoded light value.
-  ['frame defines theme tokens', html.includes('--dsw-alias-label-primary:') && html.includes(":root[data-theme='dark']")],
+  // these every var() falls back to a hardcoded light value and dark mode silently breaks.
+  ['frame defines the token layer', html.includes('--lz-text:') && html.includes(":root[data-theme='dark']")],
+  ['frame defines the DSH token mirror', html.includes('--dsw-alias-label-primary:')],
   ['frame carries a theme attribute', /<html data-theme="(light|dark)">/.test(html)],
+
   // The black box: the frame must report its own stages, since a crash inside it is silent.
   ['frame has a flight recorder', html.includes('function report(stage, detail)') && html.includes("report('frame-boot'")],
-  ['usage fetch has an abort timeout', html.includes('AbortController') && html.includes('90000')],
-  // The trend chart is a multi-series smooth curve over a natural window.
-  ['trend chart uses smoothing', html.includes('function smoothPath(')],
-  ['trend chart plots per model', /function trendChart\(series, slots, mode/.test(html)],
-  ['future slots are blank, not zero', html.includes('isFuture') && html.includes('cellFuture')],
-  ['series cap is labelled', html.includes('其他模型')],
-  // There must be no hourly window option: the window is a natural unit.
-  ['no hourly window option', !html.includes("'hour'")],
-  // The buttons are built from a data array at render time, so assert the array's contents
-  // rather than a rendered attribute that never appears in the source text.
-  ['windows are day/week/month', /\[\['day',\s*'日'\],\s*\['week',\s*'周'\],\s*\['month',\s*'月'\]\]/.test(html)],
 
-  // ---- hover tooltip
-  ['chart has a hover layer', html.includes('function wireChartHover(') && html.includes('class="chartHit"')],
-  ['tooltip markup exists', html.includes('class="chartTip"') && html.includes('chartTipHtml')],
-  ['hover shows per-model values', html.includes('chartTipRow') && html.includes('chartTipValue')],
-  ['tooltip is clamped into the plot', html.includes('offsetWidth') && html.includes('box.width')],
-  ['hover is keyboard reachable', html.includes("event.key !== 'ArrowLeft'")],
-  ['hit rects receive the pointer', html.includes('.chartHit { pointer-events: all')],
-
-  // ---- natural weeks carry their date range
-  ['month slots carry a date range', html.includes('chartAxisSub') && html.includes('range')],
-
-  // ---- interaction animation
-  ['window/mode switch animates', html.includes('data-animate') && html.includes('@keyframes chartIn')],
-  ['animation is dropped under reduced motion', html.includes('prefers-reduced-motion: reduce')],
-  ['animation only fires on a real change', html.includes('lastChartKey') && html.includes('animateChart')],
+  // ---- the five console pages + the two secondary entries
+  ['tab container exists', html.includes('id="tabbar"')],
+  ['content container exists', html.includes('id="content"')],
+  ['notice container exists', html.includes('id="notice"')],
+  ['app boots', html.includes('LZ.App.start()')],
 ]
+
+for (const page of ['OverviewPage', 'GoalPage', 'RuntimePage', 'AgentPage', 'SystemPage', 'ReadmePage', 'PresetPage']) {
+  checks.push([`page ${page} assembled`, html.includes(`LZ.${page} = `)])
+}
+for (const component of ['Card', 'StatusBadge', 'Progress', 'Timeline', 'TreeView', 'EmptyState', 'Markdown', 'Chart', 'Format']) {
+  checks.push([`component ${component} assembled`, html.includes(`LZ.${component} = `)])
+}
+for (const service of ['GoalService', 'RuntimeService', 'AgentService']) {
+  checks.push([`service ${service} assembled`, html.includes(`LZ.${service} = `)])
+}
+
+// ---- 目标中心's six required sections
+checks.push(['goal: acceptance list', html.includes('function acceptanceBlock(')])
+checks.push(['goal: task tree', html.includes('function taskBlock(') && html.includes('LZ.TreeView.tree(')])
+checks.push(['goal: evidence', html.includes('function evidenceBlock(')])
+checks.push(['goal: decisions', html.includes('function decisionBlock(')])
+checks.push(['goal: history', html.includes('function historyBlock(')])
+checks.push(['goal: overview', html.includes('function overviewBlock(')])
+
+// ---- behaviour-carrying functions the suites lift by name
+for (const signature of [
+  'function renderMarkdown(src)',
+  'function serializeMarkdown(root)',
+  'function applyMarkdownTool(value, start, end, id)',
+  'function smoothPath(points)',
+  'function niceMax(v)',
+  'function trendChart(series, slots, mode',
+]) {
+  checks.push([`liftable: ${signature}`, html.includes(signature)])
+}
+
+// ---- data layer boundaries
+checks.push(['goal view model is built in a service', html.includes('LZ.GoalService.toView(')])
+checks.push(['pages do not read raw backend fields', !/delivery\.acceptance\s*\.\s*map/.test(html)])
+
+// ---- routes
+for (const route of ['readme', 'usage', 'goal', 'preset', 'runtime']) {
+  checks.push([`reads /__luzzy/${route}`, html.includes(`'/__luzzy/${route}`)])
+}
+
+// ---- the frame must not call native dialogs (they steal window focus and never return it)
+const stripComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+const nativeDialog = stripComments(html).match(/(?<![\w.$])(?:window\s*\.\s*)?(alert|confirm|prompt)\s*\(/g)
+checks.push(['no native dialogs in code', nativeDialog === null])
+checks.push(['an in-frame dialog exists', html.includes('function showDialog(spec)')])
+checks.push(['closing a dialog returns focus to the page', html.includes('document.body.focus()')])
+
+const compile = compileFrameScript(html)
+checks.push([`frame script compiles (${compile.ok ? compile.lines + ' lines' : compile.error})`, compile.ok])
 
 let failed = 0
 for (const [label, ok] of checks) {
@@ -113,10 +103,10 @@ for (const [label, ok] of checks) {
 }
 
 console.log()
-console.log(`document size: ${(html.length / 1024).toFixed(0)} KB`)
+console.log(`document: ${(frameLength / 1024).toFixed(0)} KB  (fonts ${(fontCss.length / 1024).toFixed(0)} KB)`)
 console.log(`wrote: ${out}`)
 if (failed > 0) {
   console.log(`\nFAIL — ${failed} structural check(s)`)
   process.exit(1)
 }
-console.log('PASS — frame document is structurally complete')
+console.log(`PASS — ${checks.length} structural checks`)

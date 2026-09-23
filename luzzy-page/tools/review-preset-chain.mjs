@@ -34,7 +34,7 @@
  * Usage: node tools/review-preset-chain.mjs
  */
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -88,8 +88,16 @@ const persona = readFileSync(join(WORKSPACE_ROOT, 'luzzy-preset', 'lib', 'person
 
 console.log('1. operations: everything the page sends is something the host accepts')
 
-// What the client half and the frame send. Both halves live in src/client.js.
-const clientOps = sorted(all(src, /op:\s*'([A-Za-z]+)'/g))
+// What the client half and the frame send. In v2 the editor moved into src/pages/preset.js,
+// and scanning only src/client.js reported ten live ops as "unused host surface" — warnings
+// that name a real-looking problem and are simply wrong. The scan covers every hand-written
+// source that can issue an op.
+const opSources = [
+  src,
+  read('src/app/app.js'),
+  read('src/pages/preset.js'),
+]
+const clientOps = sorted(opSources.flatMap((text) => all(text, /op:\s*'([A-Za-z]+)'/g)))
 
 // What the host accepts, from its three dispatch sites. Read from source rather than
 // hardcoded, so adding an op to either side without the other is what this catches.
@@ -135,7 +143,10 @@ check('the host rejects unknown ops loudly', /未知操作/.test(ops), 'applyMut
 console.log('\n2. concurrency: the ops the host guards are the ops the page stamps')
 
 const guarded = sorted(
-  all(src, /const REVISION_GUARDED = \{([\s\S]*?)\}/).flatMap((block) => all(block, /([A-Za-z]+):\s*1/g)),
+  // The table moved with the editor into src/pages/preset.js. Reading only src/client.js
+  // reported all six roster ops as unguarded — a failure whose remedy ("attach the guard")
+  // was already done, and doing it again would be the actual mistake.
+  all(opSources.join('\n'), /const REVISION_GUARDED = \{([\s\S]*?)\}/).flatMap((block) => all(block, /([A-Za-z]+):\s*1/g)),
 )
 console.log(`       guarded: ${guarded.join(', ')}`)
 
@@ -160,7 +171,9 @@ if (guardedButUnsent.length > 0) {
 
 check(
   'the guard is attached centrally, not per call site',
-  /REVISION_GUARDED\[payload\.op\] === 1/.test(src),
+  // The editor moved into its own module in src/pages/. Reading only src/client.js reported
+  // the guard as missing once the file split — the check now follows the code.
+  /REVISION_GUARDED\[payload\.op\] === 1/.test(src + read('src/pages/preset.js')),
   'attaching it per call site is how it got missed on five of them',
 )
 
@@ -168,13 +181,21 @@ check(
 
 console.log('\n3. protocol: one channel, every message typed, receiver dispatches on type')
 
+// The protocol has one side in each half: the frame ASKS (app/app.js) and the outer bundle
+// ANSWERS (src/client.js). Scanning only one of them reported every message as "sent but
+// never matched" — so both halves are concatenated here.
+const protocol = `${src}\n${read('src/app/app.js')}`
+
 const frameToHost = sorted(
-  all(src, /postMessage\(\{\s*source:\s*'luzzy-page-frame',\s*type:\s*'([a-z-]+)'/g),
+  all(protocol, /postMessage\(\{\s*source:\s*'luzzy-page-frame',\s*type:\s*'([a-z-]+)'/g),
 )
 const hostToFrame = sorted(
-  all(src, /postMessage\(\{\s*source:\s*'luzzy-page-host',\s*type:\s*'([a-z-]+)'/g),
+  all(protocol, /postMessage\(\{\s*source:\s*'luzzy-page-host',\s*type:\s*'([a-z-]+)'/g),
 )
-const dispatched = sorted([...all(src, /data\.type === '([a-z-]+)'/g), ...all(src, /data\.type !== '([a-z-]+)'/g)])
+const dispatched = sorted([
+  ...all(protocol, /data\.type === '([a-z-]+)'/g),
+  ...all(protocol, /data\.type !== '([a-z-]+)'/g),
+])
 
 console.log(`       frame -> host: ${frameToHost.join(', ')}`)
 console.log(`       host -> frame: ${hostToFrame.join(', ')}`)
@@ -192,14 +213,19 @@ check(
 
 // The specific lesson: the session id may only be written by the session ANSWER. Accepting
 // any host message let a create reply (which carries no sessionId) be read as null.
+//
+// Asserted as the PROPERTY (the assignment is guarded by the type check) rather than the old
+// control shape. The frame used an early return and now uses an if-block; matching the return
+// would fail a correct rewrite while saying nothing about whether the guard exists.
+const frameListener = read('src/app/app.js')
 check(
   'only the session answer may change the session id',
-  /if \(data\.type !== 'session'\) return/.test(src),
+  /data\.type === 'session'[\s\S]{0,220}sessionId = next/.test(frameListener),
   'without this, a session-created reply is read as "your session is null"',
 )
 check(
   'the create result is awaited by its own type',
-  /data\.type !== 'session-created'/.test(src),
+  /data\.type === 'session-created'/.test(frameListener),
   'the frame must not treat any host message as the create result',
 )
 check(
@@ -320,31 +346,43 @@ const idx = src.indexOf(PLACEHOLDER)
 if (!check('the source carries the font placeholder', idx >= 0, PLACEHOLDER)) {
   // Nothing further can be checked without the anchor.
 } else {
-  const head = src.slice(0, idx)
-  const tail = src.slice(idx + PLACEHOLDER.length)
-  const at = built.indexOf(head)
-
-  check('the build contains the source verbatim up to the placeholder', at >= 0, 'lib/client.js does not contain the current src/client.js')
-  check('the build ends with the source verbatim after the placeholder', built.endsWith(tail), 'the tail of the source is missing from the build')
-
-  if (at >= 0 && built.endsWith(tail)) {
-    const injected = built.slice(at + head.length, built.length - tail.length)
-    check('the placeholder was expanded with the fonts', injected.includes('@font-face'), `${injected.length} bytes injected`)
-    check(
-      'the build is not stale',
-      true,
-      '',
-    )
-    if (injected.length < 1000) {
-      warn('the injected font CSS is suspiciously small', `${injected.length} bytes — did the subset step run?`)
+  // WHAT "FRESH" MEANS CHANGED WITH v2, so the check had to change with it.
+  //
+  // It used to compare byte offsets: the bundle contained `src/client.js` verbatim around the
+  // expanded font placeholder. The frame is now ASSEMBLED from a multi-file tree and embedded
+  // as a JSON string literal, so the outer source is no longer present verbatim in the output
+  // and the old comparison reports a correct build as stale — the most expensive kind of false
+  // alarm, because the remedy it prints is to rerun a build that already ran.
+  //
+  // The property that actually matters is unchanged: **the artifact must be newer than every
+  // source that feeds it.** Checked directly, from mtimes, over the whole tree.
+  const builtStat = statSync(join(PLUGIN_ROOT, 'lib', 'client.js'))
+  const manifest = JSON.parse(read('src/app/manifest.json'))
+  const sources = [
+    'src/client.js',
+    'src/app/frame.html',
+    'src/app/manifest.json',
+    ...manifest.styles.map((name) => `src/${name}`),
+    ...manifest.modules.map((name) => `src/${name}`),
+  ]
+  const older = sources.filter((rel) => {
+    try {
+      return statSync(join(PLUGIN_ROOT, rel)).mtimeMs > builtStat.mtimeMs
+    } catch {
+      return true
     }
-  } else {
-    // This is the failure that matters most: the running app loads lib/client.js, so an
-    // unbuilt src change means the code being reviewed is not the code being executed.
-    failures.push('the build is stale — run: python tools/build-font-css.py')
-    console.log('  FAIL the build is stale — run: python tools/build-font-css.py')
-    checks += 1
+  })
+
+  check(
+    'lib/client.js is newer than every source it is built from',
+    older.length === 0,
+    older.length === 0 ? '' : `stale against: ${older.join(', ')} — run: python tools/build-font-css.py`,
+  )
+  check('the placeholder was expanded with the fonts', built.includes('@font-face'))
+  if (builtStat.size < 100_000) {
+    warn('the bundle is suspiciously small', `${builtStat.size} bytes — did the font subset step run?`)
   }
+  console.log(`  info watched ${sources.length} sources; bundle is ${(builtStat.size / 1024).toFixed(0)} KB`)
 }
 
 // ---------------------------------------------------------------- 8. installed preset

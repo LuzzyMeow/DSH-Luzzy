@@ -14,6 +14,7 @@
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadFrameBuilder } from './frame-source.mjs'
 
 const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const bundle = readFileSync(join(PLUGIN_ROOT, 'lib', 'client.js'), 'utf8')
@@ -26,12 +27,14 @@ function check(label, ok, detail = '') {
   else failures.push(`  FAIL ${label}${detail ? ` — ${detail}` : ''}`)
 }
 
-// The bundle inlines the frame document as a template literal, so unescape it back to
-// ordinary source before lifting the functions out.
-const frameStart = bundle.indexOf('function buildFrameDocument(')
-if (frameStart < 0) throw new Error('buildFrameDocument not found in the bundle')
-const frameText = bundle.slice(frameStart)
-const source = frameText.replace(/\\`/g, '`').replace(/\\n/g, '\n').replace(/\\r\\n/g, '\n')
+// The frame is obtained from the shipped bundle through the real component (see
+// tools/frame-source.mjs). This replaced a hand-rolled brace-match plus an un-escaping hack
+// (`.replace(/\\n/g, '\n')`) that also rewrote backslashes INSIDE regex literals in the frame
+// script, turning correct functions into invalid JavaScript.
+const { srcDoc: frameHtml } = loadFrameBuilder()
+const scriptMatch = frameHtml.match(/<script>\s*\n'use strict'([\s\S]*?)<\/script>/)
+if (scriptMatch === null) throw new Error('no use-strict script block in the frame document')
+const source = scriptMatch[1]
 
 function lift(name, signature) {
   const at = source.indexOf(signature)

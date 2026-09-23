@@ -1,66 +1,46 @@
 /**
- * Extract the frame document's script block and parse it.
+ * Gate: the frame's own script must compile.
  *
- * `node --check` on the built bundle does NOT cover the frame: the frame is a plain string
- * inside `buildFrameDocument()`, so a syntax error in it survives the build and only shows
- * up when the document actually runs — as a blank page, since the frame's own error handler
- * cannot report a parse failure in the script that defines it.
+ * WHY THIS IS SEPARATE FROM THE BUILD
  *
- * That exact failure happened once already (an unescaped backtick terminated the template),
- * which is why `tools/scan-frame-backticks.mjs` exists. This is the other half: the scan
- * proves no backtick leaked, and this proves the result is parseable JavaScript. Both are
- * cheap, and a parse error here is reported with a real line number.
+ * The frame is a STRING inside the bundle. `node --check` / `new Function` on the bundle
+ * therefore says nothing about the frame — a syntax error inside it survives every outer
+ * check and appears only as a blank page. And the frame's own `report()` cannot announce it
+ * either, because `report` is defined in the same script that failed to parse.
+ *
+ * That failure has happened here more than once (an unescaped backtick, and separately a
+ * literal backslash-n that the outer template consumed). This gate reports the real line
+ * number and prints the surrounding source, because the reported position is otherwise
+ * nowhere near the mistake.
+ *
+ * IT COMPILES THE SHIPPED ARTIFACT, NOT A FILE ON DISK
+ *
+ * An earlier version read a preview HTML written by another tool. It then passed on a stale
+ * file while the bundle was broken — evidence that was worse than none, because it looked
+ * green. This reads the document out of `lib/client.js`, through the real component, so it
+ * cannot disagree with what ships.
  *
  * Usage: node tools/check-frame-script.mjs
  */
 
-import { readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { loadFrameBuilder, compileFrameScript, extractFrameScript } from './frame-source.mjs'
 
-const PLUGIN_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
+const { srcDoc } = loadFrameBuilder()
 
-const previewPath = process.argv[2] ?? join(tmpdir(), 'luzzy-frame-preview.html')
-
-let html
-try {
-  html = readFileSync(previewPath, 'utf8')
-} catch (error) {
-  console.error(`frame-script: cannot read ${previewPath} — ${error.message}`)
-  console.error('frame-script: run tools/render-frame-preview.mjs first')
+const script = extractFrameScript(srcDoc)
+if (script === null) {
+  console.error('frame-script: no <script> block with a use-strict pragma was found in the built frame')
   process.exit(1)
 }
 
-// The frame's script is the one that starts with the 'use strict' pragma; the preview may
-// carry other script tags (a shim), so this is matched on content rather than position.
-const match = html.match(/<script>\s*\n'use strict'([\s\S]*?)<\/script>/)
-if (match === null) {
-  console.error('frame-script: no <script> block with a use-strict pragma was found')
+const lineCount = script.split('\n').length
+const result = compileFrameScript(srcDoc)
+
+if (!result.ok) {
+  console.error(`frame-script: PARSE FAILED over ${lineCount} lines — ${result.error}`)
+  if (result.context !== '') console.error(result.context)
+  console.error('\nframe-script: the page would render BLANK. Fix the reported line in the module that owns it.')
   process.exit(1)
 }
 
-const code = `'use strict'${match[1]}`
-const lineCount = code.split('\n').length
-
-try {
-  // `new Function` compiles without executing, which is what a parse check needs: running
-  // the frame's script here would fail on `document` before reaching a real error.
-  new Function(code)
-} catch (error) {
-  const detail = error instanceof Error ? error.message : String(error)
-  console.error(`frame-script: PARSE FAILED over ${lineCount} lines — ${detail}`)
-  // Point at the reported line so the fix does not start with a search.
-  const lineMatch = /:(\d+):(\d+)?/.exec(detail)
-  if (lineMatch !== null) {
-    const line = Number(lineMatch[1])
-    const lines = code.split('\n')
-    for (let index = Math.max(0, line - 4); index < Math.min(lines.length, line + 3); index += 1) {
-      const marker = index + 1 === line ? '>>' : '  '
-      console.error(`${marker} ${String(index + 1).padStart(5)}: ${lines[index]}`)
-    }
-  }
-  process.exit(1)
-}
-
-console.log(`frame-script: PASS — ${lineCount} lines parse cleanly`)
+console.log(`frame-script: PASS — ${result.lines} lines parse cleanly (compiled from the shipped bundle)`)

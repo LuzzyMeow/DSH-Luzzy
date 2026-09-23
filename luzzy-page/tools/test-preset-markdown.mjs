@@ -37,27 +37,17 @@ function same(label, actual, expected) {
 
 // LIFTING THE FUNCTIONS
 //
-// The bundle inlines the frame document as a template literal, so the functions are not
-// directly reachable as source. Rather than un-escaping that literal by hand — a blanket
-// `.replace(/\\n/g, '\n')` also rewrites the backslashes INSIDE regex literals in the frame
-// script and produces invalid JavaScript — the real `buildFrameDocument()` is called and the
-// functions are lifted out of the document it actually produces. That is the same artifact
-// the browser receives, so the regexes are the real ones.
-const frameStart = bundle.indexOf('function buildFrameDocument(')
-if (frameStart < 0) throw new Error('buildFrameDocument not found in the bundle')
-let braceDepth = 0
-let frameEnd = -1
-for (let i = bundle.indexOf('{', frameStart); i < bundle.length; i += 1) {
-  if (bundle[i] === '{') braceDepth += 1
-  else if (bundle[i] === '}') {
-    braceDepth -= 1
-    if (braceDepth === 0) { frameEnd = i + 1; break }
-  }
-}
-if (frameEnd < 0) throw new Error('could not find the end of buildFrameDocument')
+// The frame is obtained from the SHIPPED bundle through the real component — see
+// tools/frame-source.mjs. That module exists because the previous approach here (brace-match
+// `buildFrameDocument` out of the bundle, then un-escape the template literal) broke twice
+// during the v2 refactor: the blanket `.replace(/\\n/g, '\n')` rewrote backslashes inside
+// regex literals, and lifting only the one function missed the constants it closes over.
+//
+// What is lifted is the exact document the browser receives, produced by the exact shipped
+// code, so the regexes under test are the real ones.
+import { loadFrameBuilder } from './frame-source.mjs'
 
-const buildFrameDocument = new Function(`${bundle.slice(frameStart, frameEnd)}; return buildFrameDocument`)()
-const frameHtml = buildFrameDocument('', 'light')
+const { srcDoc: frameHtml } = loadFrameBuilder()
 
 const scriptMatch = frameHtml.match(/<script>\s*\n'use strict'([\s\S]*?)<\/script>/)
 if (scriptMatch === null) throw new Error('no use-strict script block in the frame document')
@@ -458,7 +448,7 @@ function buildTree(root, html) {
 
 // ---------------------------------------------------------------- toolbar wiring (static)
 
-check('the toolbar is declared as data', bundle.includes('const MD_TOOLS'))
+check('the toolbar is declared as data', frameHtml.includes('const MD_TOOLS'))
 for (const id of ['bold', 'italic', 'strike', 'code', 'clear', 'h1', 'h2', 'h3',
   'bullet', 'ordered', 'task', 'codeblock', 'quote', 'table', 'hr', 'link']) {
   check(`toolbar offers ${id}`, new RegExp(`id: '${id}'`).test(bundle))
@@ -466,52 +456,55 @@ for (const id of ['bold', 'italic', 'strike', 'code', 'clear', 'h1', 'h2', 'h3',
 // Underline is not implementable: Markdown has no syntax for it, and letting raw HTML through
 // the renderer is exactly the XSS hole it closes. A button whose output the preview drops is
 // worse than no button — so this is an assertion, not a gap.
-check('no underline button is offered', !/id: 'underline'/.test(bundle))
-check('the toolbar is grouped for the divider rendering', bundle.includes('MD_GROUPS'))
-check('every button is rendered from the groups', bundle.includes('.map(function (tool)'))
-check('every button carries its tool id', bundle.includes('data-md="'))
-check('every button has an accessible name', bundle.includes('aria-label="'))
-check('icons are hand-written SVG, not a dependency', bundle.includes('const MD_ICONS'))
-check('toolbar buttons keep focus in the textarea', bundle.includes("addEventListener('mousedown'"))
-check('toolbar edits go through setRangeText for undo', bundle.includes('setRangeText'))
+check('no underline button is offered', !/id: 'underline'/.test(frameHtml))
+check('the toolbar is grouped for the divider rendering', frameHtml.includes('MD_GROUPS'))
+check('every button is rendered from the groups', frameHtml.includes('.map(function (tool)'))
+check('every button carries its tool id', frameHtml.includes('data-md="'))
+check('every button has an accessible name', frameHtml.includes('aria-label="'))
+check('icons are hand-written SVG, not a dependency', frameHtml.includes('const MD_ICONS'))
+check('toolbar buttons keep focus in the textarea', frameHtml.includes("addEventListener('mousedown'"))
+check('toolbar edits go through setRangeText for undo', frameHtml.includes('setRangeText'))
 
 // --- one surface per mode, and it is the RENDERED document
-check('the editor is ONE surface, not split panes', !bundle.includes('mdPanePreview'))
-check('the rendered surface exists and is the editable one', bundle.includes('id="presetVisual"'))
-check('the rendered surface is contenteditable', bundle.includes('contenteditable="'))
-check('the rendered surface is rendered from promptText', bundle.includes('renderMarkdown(promptText)'))
-check('the serializer is the write-back path', bundle.includes('serializeMarkdown(visual)'))
+check('the editor is ONE surface, not split panes', !frameHtml.includes('mdPanePreview'))
+check('the rendered surface exists and is the editable one', frameHtml.includes('id="presetVisual"'))
+check('the rendered surface is contenteditable', frameHtml.includes('contenteditable="'))
+// The markdown renderer and serializer now live in the LZ.Markdown module, so the call sites
+// read through the namespace. Asserting the OLD bare names would keep passing only by
+// accident, and would miss the two modules drifting apart.
+check('the rendered surface is rendered from promptText', frameHtml.includes('LZ.Markdown.render(promptText)'))
+check('the serializer is the write-back path', frameHtml.includes('LZ.Markdown.serialize(visual)'))
 // The write-back must happen on a real edit only. Re-serializing on render would normalize any
 // construct the serializer does not model the moment someone merely looked at the view.
-check('the write-back is bound to the input event', bundle.includes("visual.addEventListener('input'"))
-check('pastes are forced to plain text', bundle.includes("getData('text/plain')"))
-check('exactly one surface per mode is visible', bundle.includes(".mdArea[data-mode='live'] textarea.mdLayer"))
-check('source mode shows the raw textarea', bundle.includes(".mdArea[data-mode='source'] .mdVisual"))
+check('the write-back is bound to the input event', frameHtml.includes("visual.addEventListener('input'"))
+check('pastes are forced to plain text', frameHtml.includes("getData('text/plain')"))
+check('exactly one surface per mode is visible', frameHtml.includes(".mdArea[data-mode='live'] textarea.mdLayer"))
+check('source mode shows the raw textarea', frameHtml.includes(".mdArea[data-mode='source'] .mdVisual"))
 
 // --- the three display modes
 for (const mode of ['live', 'source', 'reading']) {
   check(`mode ${mode} exists`, new RegExp(`id: '${mode}'`).test(bundle))
 }
-check('live preview is the default mode', /let promptMode = 'live'/.test(bundle))
-check('the mode menu is rendered from MD_MODES', bundle.includes('MD_MODES.map'))
-check('the mode menu marks the current mode for AT', bundle.includes('role="menuitemradio"'))
-check('the mode menu opens upward', bundle.includes('bottom: calc(100% + 6px)'))
+check('live preview is the default mode', /let promptMode = 'live'/.test(frameHtml))
+check('the mode menu is rendered from MD_MODES', frameHtml.includes('MD_MODES.map'))
+check('the mode menu marks the current mode for AT', frameHtml.includes('role="menuitemradio"'))
+check('the mode menu opens upward', frameHtml.includes('bottom: calc(100% + 6px)'))
 // Visibility must ride ONE attribute. A hidden property toggled alongside it is a second
 // source of truth that the next re-render overwrites, and the two eventually disagree.
-check('mode visibility rides the area attribute alone', bundle.includes(".mdArea[data-mode='source'] .mdVisual"))
+check('mode visibility rides the area attribute alone', frameHtml.includes(".mdArea[data-mode='source'] .mdVisual"))
 // Every redraw goes through syncVisual, which is what keeps the empty-state flag in step with
 // the document. A direct assignment somewhere else would silently skip that, so the only
 // remaining direct assignment must be the one INSIDE syncVisual.
-const directVisualWrites = (bundle.match(/visual\.innerHTML = renderMarkdown/g) ?? []).length
+const directVisualWrites = (frameHtml.match(/visual\.innerHTML = LZ\.Markdown\.render\(promptText\)/g) ?? []).length
 check('every surface redraw goes through syncVisual', directVisualWrites === 1,
   `found ${directVisualWrites} direct assignments`)
-check('live mode is the default and is editable', /let promptMode = 'live'/.test(bundle))
+check('live mode is the default and is editable', /let promptMode = 'live'/.test(frameHtml))
 
 // --- the caret-driven active tint
-check('the active set is read from the caret line', bundle.includes('function activeToolsFor'))
-check('an active button is tinted', bundle.includes("[data-on='true']"))
+check('the active set is read from the caret line', frameHtml.includes('function activeToolsFor'))
+check('an active button is tinted', frameHtml.includes("[data-on='true']"))
 // The tint must never be set speculatively at render time: it reports what the text IS.
-check('buttons render as inactive by default', bundle.includes('data-on="false"'))
+check('buttons render as inactive by default', frameHtml.includes('data-on="false"'))
 
 // --- the design system's scales (see the design review: these had drifted badly)
 //
@@ -533,7 +526,7 @@ const ALLOWED_SPACING = new Set([0, 1, 2, 4, 8, 12, 16, 20, 24, 32, 40])
 
 function valuesOf(re) {
   const found = new Set()
-  for (const m of bundle.matchAll(re)) found.add(Number(m[1]))
+  for (const m of frameHtml.matchAll(re)) found.add(Number(m[1]))
   return [...found].sort((a, b) => a - b)
 }
 
@@ -555,24 +548,24 @@ check('spacing stays on the 4px base scale', offSpacing.length === 0,
 // The decorative background was a hard-coded violet radial glow. Three separate rules forbade
 // it (semantic tokens only, no AI-violet default, and no ornament that cannot justify itself),
 // so its absence is asserted rather than left to review.
-check('the decorative radial glow is gone', !bundle.includes('radial-gradient'))
+check('the decorative radial glow is gone', !frameHtml.includes('radial-gradient'))
 
 // The empty-editor hint rides generated content, NOT an element. A real placeholder node would
 // be picked up by serializeMarkdown and could be written into the user's prompt; CSS content is
 // not in the DOM at all, so that class of bug cannot happen.
 check('the empty hint is generated content, not an element',
-  bundle.includes("mdVisual[data-empty='true']::before"))
-check('the empty hint is driven by a flag the renderer maintains', bundle.includes('data-empty="'))
+    frameHtml.includes("mdVisual[data-empty='true']::before"))
+check('the empty hint is driven by a flag the renderer maintains', frameHtml.includes('data-empty="'))
 
 // The group delete affordance must stay reachable without a hover, and named with a verb.
-check('group delete is named with verb + noun', bundle.includes('aria-label="删除分组 '))
-check('group delete is not permanently visible', bundle.includes('.rosterGroupDel {'))
-check('group delete is revealed on hover and focus', bundle.includes('.rosterGroupHead:hover .rosterGroupDel'))
+check('group delete is named with verb + noun', frameHtml.includes('aria-label="删除分组 '))
+check('group delete is not permanently visible', frameHtml.includes('.rosterGroupDel {'))
+check('group delete is revealed on hover and focus', frameHtml.includes('.rosterGroupHead:hover .rosterGroupDel'))
 
 // A failure message must be a sentence a person can act on, with the machine text behind a
 // disclosure rather than in the headline.
-check('failures read as plain sentences', bundle.includes('用量数据读不出来'))
-check('machine detail is disclosed, not headlined', bundle.includes('statusDetail'))
+check('failures read as plain sentences', frameHtml.includes('用量数据读不出来'))
+check('machine detail is disclosed, not headlined', frameHtml.includes('statusDetail'))
 
 console.log(notes.join('\n'))
 if (failures.length > 0) {
