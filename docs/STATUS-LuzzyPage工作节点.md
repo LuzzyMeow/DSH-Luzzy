@@ -1729,3 +1729,110 @@ ode tools/verify-on-machine.mjs 会自己判断：宿主标记的 pid **是否�
 - **不接管续行**。`dsh-goal-round-driver` 管「要不要再给一轮」，这一层管「这一轮是不是围绕正确的目标」。**两者不合并**——交付层不调 `followup()`。
 - **不用第二个 LLM 审查**。能确定性判定的（修订、证据存在、必做项状态）全用规则；只有「目标是否真的达成」留给模型。
 - **fork 不继承计划**。新会话 id，新文件——一个 fork 不该自己复活旧目标。
+---
+
+## 二十四、注入消息没有 `id` —— 三个会话被写坏（第十五轮）
+
+### 24.1 症状与真凶
+
+用户报：「会话暂时无法读取：stored session … is corrupt: … session event at seq 25 lacks an identified message」。
+
+真凶不在 DSH，在本插件。`lib/goal-enforce.mjs` 的三处注入**手写了消息对象字面量，没有 `id`**：
+
+| 注入点 | 内容 | 事件 |
+|---|---|---|
+| `goal_state` 定向块 | 目标进度、焦点、下一步 | `agent/pre-step` |
+| `<goal_hint>` 无目标提醒 | 建议建目标 | `agent/pre-step` |
+| `<goal_reconciliation>` 同步请求 | 要求回写交付状态 | `agent/turn-stopping` |
+
+harness 只在 `createUserMessage()` 里铸 id，所以**运行期一路不报错**，日志照写；等到**加载**时
+`assertMessageEventShape` 才拒绝——而且拒绝的是**整个日志**，不是那一条事件：
+
+```
+stored session "<id>" failed validation: Error: session event at seq N lacks an identified message
+```
+
+**一条坏事件 = 整个会话永久不可读**，包括它前后所有正常轮次。
+
+### 24.2 波及范围（全机扫描，不是抽样）
+
+| 会话 | 坏事件 | 首条 seq |
+|---|---|---|
+| `session-a2cdf4dd`（用户报的那个） | 81 / 1095 | 25 |
+| `session-3c5ab27f` | 48 / 1838 | 3075 |
+| `session-6914794e`（当时正在跑的那个） | 1 / 337 | 27 |
+
+全机 94 个日志里**只有这 3 个**有问题，**130 条坏事件全部来自 `dsh-luzzy-page`**，
+`source.kind` 一律 `plugin` + `form: notice`。另查出 2 条 `agent/inbox/spliced` 里的同型消息
+（inbox 按 `id` 给待处理消息去重，那是**另一个**运行期风险）。
+
+### 24.3 修法：一个构造器，三处调用
+
+`lib/goal-enforce.mjs` 新增 `pluginNotice(text, summary)`，铸 `randomUUID()` 并附全 `source`。
+三处注入改为调它；**代码里再没有第二处手写消息字面量**，未来新增注入点不可能再忘。
+
+### 24.4 断言必须用 harness 自己的校验器
+
+新增的断言调 `adoptSessionEvent`（**真包，不是复述规则**）验证三个注入点各一条消息。
+理由是这条缺陷的教训：**替身若比真货宽松，就抓不到它该抓的缺陷**（§5.21 同型）。一个只检查
+「有没有 id 字段」的替身会和本插件的错误认知一致，于是继续全绿。
+
+**并且证明它会失败**：`tools/prove-guard.mjs` 在临时目录的**副本**上摘掉那行 id，跑套件，
+要求它变红——实测 **7 条断言失败，并报出 harness 的原话** `lacks an identified message`。
+
+### 24.5 修复既有日志：`tools/repair-session-ids.mjs`
+
+只补 `id`，事件一条不删、不重排、不改时间，消息文本逐字节不变。默认 dry-run。
+
+**两个设计决定都是被证据推翻后的结果，不是一开始就想对的：**
+
+1. **不能按「内容相同」合并 id。** 第一版按 content+source 指纹配对，**自己的校验就报了
+   duplicate id**。去健康日志里校准才明白：**83 / 94 个健康日志本来就重复 id** —— inbox 暂存副本与
+   它变成的 `user/message` 事件是**同一条消息、共享一个 id**；而**同样的提示文本**在真机上
+   出现过 **3 次、3 个不同 id**（每次注入都是独立消息）。按内容合并会既融合不同消息、
+   又给出重复 id（inbox 会拒绝：`message "…" is already pending`）。
+   **正解是按位置配对**（splice → 其后第一条同内容 `user/message`），其余各自铸新 id。
+2. **「全日志 id 唯一」是个错断言。** 同上，健康日志本来就不唯一。真规则是
+   **同一个待处理列表内不重复**——那才是 inbox 抛错的地方。
+
+**并发写守卫**：本工具整文件读→改→写，若 DSH 仍在向该会话追加，rename 会**静默吃掉**窗口内的轮次。
+所以 rename 前重新 stat，size/mtime 一动就拒绝。这条也**被证伪式地测过**：
+`tools/prove-repair-race-guard.mjs` 用 `spawn`（**不是 `execFileSync`**——第一版用它，事件循环被阻塞，
+追加器一次都没跑，测试自己报「inconclusive」）在跑的同时追加，实测 **112 帧落下、工具拒绝写入**。
+
+### 24.6 验收：用 DSH 自己的读取器判定
+
+`tools/verify-session-repair.mjs` 直接构造 `JsonlSessionPersistence`（**真上下文**：它继承 cordis
+`Service`，普通对象 ctx 会在 I/O 之前就 `Cannot read properties of undefined (reading 'provide')`），
+对**同一个夹具**断言两件事：
+
+| 会话 | 原始日志 | 修复后 |
+|---|---|---|
+| `a2cdf4dd` | 拒绝：`seq 25 lacks an identified message` | **接受**，2597 → 2597 事件 |
+| `3c5ab27f` | 拒绝：`seq 3075 …` | **接受**，4510 → 4510 事件 |
+| `6914794e` | 拒绝：`seq 27 …` | **接受**，745 → 745 事件 |
+
+**事件数一条不差**，且「原始必须被拒绝」也断言了——否则夹具根本没复现这个缺陷。
+
+### 24.7 回归与状态
+
+- **25/25 套件绿**（`test-goal-enforce` 156 条，新增 13 条身份断言）
+- **`lib/goal-enforce.mjs` 改了，宿主半不热重载 → 重启 DSH 才生效**
+- **`a2cdf4dd` 与 `3c5ab27f` 已修复并验证**（两个已关闭的会话，修复后经 DSH 真读取器确认可读，
+  事件数 2597→2597、4510→4510 一条不差；原始日志在 `~/.dsh/session-id-repair-backup/`）
+- [ ] **`6914794e` 仍未修**——它正是本轮会话，**必须在关掉 DSH 之后修**。
+
+**为什么剩下这一个要等**：修复是「整文件读 → 改 → 写回」，而 DSH 若还在向它追加，
+写入会覆盖掉窗口内的轮次。工具为此有并发守卫（检测到 size/mtime 变化就拒绝），
+所以**在 DSH 运行时执行它不会坏事，但也修不成**。
+关掉 DSH 后执行：
+
+```
+node "C:\Users\Administrator\Desktop\DSH Plugin\luzzy-page\tools\repair-session-ids.mjs" --apply
+```
+
+**注意**：`6914794e` 就是本轮会话本身，**重启后它原本会读不出来**（seq 27 那条）。
+先修再开 DSH，它就能正常读回。
+
+**为什么这个会话只坏了 1 条**：那条是「无目标提醒」`<goal_hint>`——**每会话只发一次**，
+已经发过，所以不会再有第二条。实测连续读数都停在 1。
