@@ -255,8 +255,20 @@ try {
   check('the frame reported a successful goal fetch', frameDiag.some((d) => d.includes('goal-fetch-ok')),
     `${frameDiag.length} diag report(s)`)
 
-  check('the objective from the runtime goal is on screen', shown.includes('LIVE-MARKER 目标陈述'),
-    shown.includes('LIVE-MARKER') ? 'marker found' : 'no marker at all')
+  // 目标正文**不再**铺在概览卡里：卡片最上面换成 Agent 写的一段「概览目标」。所以这一条现在是
+  // **两半**，缺任何一半都是坏的：
+  //   ① 卡片上不能再有目标正文 —— 有了就是那面墙又回来了，用户提过的正是它；
+  //   ② 但它一个字都没少 —— 点开「完整计划」，全文在第 1 节里（视窗那一段断言）。
+  check('the objective is NOT spread into the overview card any more',
+    !shown.includes('LIVE-MARKER 目标陈述'),
+    shown.includes('LIVE-MARKER 目标陈述') ? 'the objective wall is back' : '')
+
+  // 卡片顶上那一格是 Agent 自己的字段，而 fixture 没有 setGoalSummary —— 所以它必须显示空态，
+  // 而且**不拿目标正文顶上**。顶上去是最容易顺手做、也最坏的一种「补」：页面看起来已经答过了，
+  // 于是没有人会回来写它（预期产出正是这么空着上线过一次的）。
+  check('and the card shows the Agent\'s own 概览目标 field, empty rather than borrowed',
+    shown.includes('概览目标') && shown.includes('还没有写。这一格要一段话 —— 这个目标在做什么。'),
+    '概览目标 那一格没有照实说「还没有写」')
 
   check('the current focus from the plan is on screen', shown.includes('LIVE-MARKER 当前焦点文案'))
 
@@ -294,6 +306,11 @@ try {
 
   const dialog = String(await page.evaluate('document.body.innerText') ?? '')
   check('the markdown viewer opened', dialog.includes('完整目标与计划'))
+
+  // 上面断言了「卡片里没有目标正文」，这一条断言「所以它必须在这里」—— 两句合起来才成立。
+  // 只钉前者的话，把 objective 整段删掉、或让投影不再输出它，也会让套件全绿。
+  check('and the full objective is in the plan viewer, unharmed', dialog.includes('LIVE-MARKER 目标陈述'),
+    '全文不见了 —— 卡片那一半删对了，可它没有落到视窗里')
 
   // 渲染过 vs 原文：渲染器把 `## 1. 预期目标` 变成 <h2>1. 预期目标</h2>，所以页面上不该
   // 再出现井号。井号还在 = 它把 Markdown 当纯文本贴出来了，那正是这一件要避免的结果。

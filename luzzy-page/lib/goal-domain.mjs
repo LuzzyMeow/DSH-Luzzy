@@ -58,6 +58,19 @@ export const MAX_NEXT_ITEMS = 20
 export const MAX_EXPECTED_OUTPUT_CHARS = 1200
 
 /**
+ * 概览目标：**一段话**，但比预期产出更短。
+ *
+ * 它不是「预期产出」的另一个名字，两格回答的是两个问题：
+ *   概览目标  这个目标在做什么       —— 抬头的第一句
+ *   预期产出  做完之后会得到什么     —— 对结果的承诺
+ *
+ * 上限给 600 而不是 1200，是因为**概览的意义就在短**：它顶掉的是概览卡里那份两万五千字的
+ * 目标原文，如果它自己也写到一千多字，那只是把同一块版面换了个名字。
+ * 超长同样是拒绝而不是截断 —— 被截断的概览会以一个「长度正常」的样子留在卡片上。
+ */
+export const MAX_GOAL_SUMMARY_CHARS = 600
+
+/**
  * 状态链的两次判断的取值。
  *
  * 两条分支就是用户给的那两条：命中（这一轮在推进一个长任务）与未命中（不是）。未命中不是
@@ -248,6 +261,17 @@ export function emptyDelivery(sessionId) {
     focus: '',
     next: [],
     /**
+     * 概览目标：Agent 写的一段话，回答「这个目标在做什么」。
+     *
+     * 与运行时 objective / `objectiveMirror` 的分工：那两者是**权威原文**（真实会话里
+     * 两万五千字），这一格是 Agent 对它的**概括**。原文一个字都不删 —— 「完整计划」那个
+     * Markdown 视窗仍然渲染 `runtimeGoal.objective` 全文，这一格只决定概览卡上先给人看哪句话。
+     *
+     * 空字符串 = 还没写。页面照实说「还没有写」，绝不拿原文顶上去：原文一顶上，概览卡就又回到
+     * 「塞了两万字」的样子，而那正是用户要改掉的东西。
+     */
+    goalSummary: '',
+    /**
      * 预期产出：这个目标做完之后到底会得到什么，**一段话**概括。
      *
      * 为什么它是独立字段而不是塞进 focus / next：
@@ -321,6 +345,7 @@ export function normalizeDelivery(raw, sessionId) {
   delivery.focus = text(raw.focus, MAX_FOCUS_CHARS) ?? ''
   delivery.next = stringList(raw.next, MAX_NEXT_ITEMS)
   delivery.expectedOutput = text(raw.expectedOutput, MAX_EXPECTED_OUTPUT_CHARS) ?? ''
+  delivery.goalSummary = text(raw.goalSummary, MAX_GOAL_SUMMARY_CHARS) ?? ''
   delivery.constraints = stringList(raw.constraints, 50)
   delivery.revision = nonNegativeInteger(raw.revision)
   delivery.updatedAt = nonNegativeInteger(raw.updatedAt)
@@ -979,6 +1004,52 @@ function describeScope(scope) {
  *   reserved change-log id (needed because the id must be derived from the pre-state).
  * @returns {{delivery: object, created?: string} | {error: string, code: string, proposal?: object, delivery?: object}}
  */
+/**
+ * 「一段话」的校验收口 —— 预期产出与概览目标共用同一条规则。
+ *
+ * 抽出来不是为了少打几行字：**这两格对用户的承诺是同一句话**（「你在这里看到的，是 Agent
+ * 写的一段话」）。一旦有一边悄悄放宽 —— 比如只查长度、不查分段 —— 页面上并排的两格就会长得
+ * 一样却遵守不同的契约，而那种不一致从界面上看不出来。
+ *
+ * 判据是**空行**而不是换行：一段话里的软换行仍然是一段，空行才是真的分了段。
+ * 超长一律**拒绝**而不是截断：被截断的概览会以一个「长度正常」的样子留在卡片上。
+ *
+ * @param {unknown} value - 模型给的原文。
+ * @param {string} label - 中文名，写进拒绝文案。
+ * @param {string} key - payload 字段名，写进拒绝文案（模型要知道该补哪个键）。
+ * @param {number} max - 字数上限。
+ * @returns {{ok: true, body: string} | {ok: false, error: string, code: string}}
+ */
+function oneParagraph(value, label, key, max) {
+  if (typeof value !== 'string') {
+    return { ok: false, error: `缺少${label}（${key}）`, code: ERROR_CODES.INVALID_STATE }
+  }
+  const body = value.replace(/\r\n/g, '\n').trim()
+  if (body === '') {
+    return {
+      ok: false,
+      error: `${label}不能是空的 —— 空字符串不等于「还没想好」，它会让页面把没填读成填了`,
+      code: ERROR_CODES.INVALID_STATE,
+    }
+  }
+  if (/\n[ \t]*\n/.test(body)) {
+    return {
+      ok: false,
+      error: `${label}必须是**一段**，这里用空行分成了多段。压成一段再提交 —— `
+        + '页面按「一段话」排版这一格，分段会让它变成一篇文章，而它要回答的是一句话的问题。',
+      code: ERROR_CODES.INVALID_STATE,
+    }
+  }
+  if (body.length > max) {
+    return {
+      ok: false,
+      error: `${label}有 ${body.length} 字，超过上限 ${max} —— 要的是概括，不是改写。`,
+      code: ERROR_CODES.INVALID_STATE,
+    }
+  }
+  return { ok: true, body }
+}
+
 export function applyDeliveryOp(delivery, op, payload, context) {
   const at = nonNegativeInteger(context?.at)
   const actor = oneOf(context?.actor, ACTORS, 'agent')
@@ -1238,32 +1309,25 @@ export function applyDeliveryOp(delivery, op, payload, context) {
       // 「一段话」是用户明确提的要求，所以这里**真的去查它是不是一段**。
       // 只在工具描述里写一句「请写成一段」是不够的：模型会写三段，而页面上那三段的排版
       // 看起来还挺好 —— 坏得不像坏的，就没人会回来改。
-      //
-      // 判据是**空行**而不是换行：一段话里的软换行仍然是一段，空行才是真的分了段。
-      const supplied = typeof input.expectedOutput === 'string' ? input.expectedOutput : undefined
-      if (supplied === undefined) {
-        return { error: '缺少预期产出（expectedOutput）', code: ERROR_CODES.INVALID_STATE }
-      }
-      const body = supplied.replace(/\r\n/g, '\n').trim()
-      if (body === '') {
-        return { error: '预期产出不能是空的 —— 空字符串不等于「还没想好」，它会让页面把没填读成填了', code: ERROR_CODES.INVALID_STATE }
-      }
-      if (/\n[ \t]*\n/.test(body)) {
-        return {
-          error: '预期产出必须是**一段**，这里用空行分成了多段。压成一段再提交 —— '
-            + '页面按「一段话」排版这一格，分段会让它变成一篇文章，而它要回答的是一句话的问题。',
-          code: ERROR_CODES.INVALID_STATE,
-        }
-      }
-      if (body.length > MAX_EXPECTED_OUTPUT_CHARS) {
-        // 明确拒绝而不是悄悄截断：被截断的摘要会以一个「长度正常」的样子留在页面上。
-        return {
-          error: `预期产出有 ${body.length} 字，超过上限 ${MAX_EXPECTED_OUTPUT_CHARS} —— 要的是概括，不是改写。`,
-          code: ERROR_CODES.INVALID_STATE,
-        }
-      }
-      next.expectedOutput = body
-      recordChange(next, at, actor, 'set expected output', body, changeId)
+      const checked = oneParagraph(input.expectedOutput, '预期产出', 'expectedOutput', MAX_EXPECTED_OUTPUT_CHARS)
+      if (!checked.ok) return { error: checked.error, code: checked.code }
+      next.expectedOutput = checked.body
+      recordChange(next, at, actor, 'set expected output', checked.body, changeId)
+      next.revision += 1
+      next.updatedAt = at
+      return { delivery: next }
+    }
+
+    // 概览目标：与预期产出共用同一条规则（`oneParagraph`），只是上限更短、位置不同 ——
+    // 它在概览卡最上面（抬头一句），预期产出在它下面（对结果的承诺）。
+    //
+    // 两格都**不是**人类权威字段：它们是 Agent 对同一个目标的两个视角，所以归 Agent 写。
+    // 目标原文一个字都不动 —— 完整的那份仍然由「完整计划」视窗承载。
+    case 'setGoalSummary': {
+      const checked = oneParagraph(input.goalSummary, '概览目标', 'goalSummary', MAX_GOAL_SUMMARY_CHARS)
+      if (!checked.ok) return { error: checked.error, code: checked.code }
+      next.goalSummary = checked.body
+      recordChange(next, at, actor, 'set goal summary', checked.body, changeId)
       next.revision += 1
       next.updatedAt = at
       return { delivery: next }
@@ -1522,16 +1586,12 @@ export function applyDeliveryOp(delivery, op, payload, context) {
  *   constraints what the work may not do. "无" is a legitimate ANSWER; the requirement is that
  *               the question was asked, which is why the refusal says so explicitly.
  *
- *   expectedOutput 用户明确要求「Agent 填写」。**这条要求必须在这里**，不能只写在工具描述
- *               里 —— 已经实测过一次：描述写了、页面也做了，结果是这一格**空着上线**，
- *               而页面上看不出哪里不对（空态是一句真诚的「还没有写」，它不报错）。
- *               它和上面三条的区别是**能自己补**（不需要人批），所以这条要求是自愈的：
- *               拒绝文本点名它，Agent 调一次 setExpectedOutput 门就开了。
- *   acceptance  without it "done" is unjudgeable — §16/§20's core claim
- *   scope       without it "done enough" is unjudgeable, and §23 says a scope the user set must
- *               beat the agent's own plan; you cannot honour a boundary you never drew
- *   constraints what the work may not do. "无" is a legitimate ANSWER; the requirement is that
- *               the question was asked, which is why the refusal says so explicitly.
+ * 后两格（概览目标、预期产出）用户明确要求「Agent 填写」。**这条要求必须在这里**，不能只写在
+ * 工具描述里 —— 已经实测过一次：描述写了、页面也做了，结果预期产出**空着上线**，而页面上看不出
+ * 哪里不对（空态是一句真诚的「还没有写」，它不报错）。
+ *
+ * 它们和上面三条的区别是**能自己补**（不需要人批），所以这条要求是自愈的：拒绝文本点名它，
+ * Agent 调一次 setGoalSummary / setExpectedOutput 门就开了。
  *
  * Deliberately NOT required: focus and next (transient working state — §13 says a trivial turn
  * must not be forced to write), tasks (a plan can be one step), decisions and evidence (both
@@ -1545,6 +1605,7 @@ export function missingGoalFields(delivery) {
     (delivery.proposals ?? []).some((row) => row.field === name && row.status === 'pending')
 
   const missing = []
+  if ((delivery.goalSummary ?? '') === '') missing.push('概览目标')
   if ((delivery.expectedOutput ?? '') === '') missing.push('预期产出')
   if ((delivery.acceptance ?? []).length === 0) missing.push('验收标准')
 
@@ -1575,6 +1636,9 @@ export const DELIVERY_OPS = Object.freeze([
   // 预期产出与 focus / next 同类：都是 Agent 写的**执行记录**，不碰目标 / 范围 / 约束 /
   // 必须的验收标准那些人类权威字段（§65 的 Human 列）。所以它进这张表，不进 PROPOSAL_OPS。
   'setExpectedOutput',
+  // 概览目标：与预期产出同一类（Agent 写的执行记录，不是人类权威字段），所以进这张表。
+  // 它比预期产出更靠前，因为它在卡片最上面 —— 但**顺序由页面决定，这里只登记能力**。
+  'setGoalSummary',
   'proposeScope',
   'proposeConstraints',
   'addBlocker',
@@ -1820,11 +1884,18 @@ export function renderGoalMarkdown(delivery, runtimeGoal, meta = {}) {
   if (meta.generatedAt !== undefined) lines.push(`- 投影时间：${formatStamp(meta.generatedAt)}（UTC）`)
   lines.push('')
 
-  // 1b — 预期产出。
+  // 1b — 概览目标 + 预期产出。
   //
-  // 挂在第 1 节下面、而不是新开一节再把它后面的 12 节全部往后推一位：编号是给人指位置用的
-  // （「第 5 节看约束」），平移一次，此前所有口头与文字里的指代就全错了。一个新增字段不值得
-  // 让整份文档的坐标系统动一次。
+  // 两格都挂在第 1 节下面、而不是各新开一节再把它后面的 12 节全部往后推一位：编号是给人
+  // 指位置用的（「第 5 节看约束」），平移一次，此前所有口头与文字里的指代就全错了。
+  // 两个 Agent 写的字段不值得让整份文档的坐标系统动一次。
+  //
+  // 顺序固定：概览目标在前（抬头一句），预期产出紧跟其后（对结果的承诺）—— 与页面上那两格
+  // 的上下关系一致，读者不必在两种顺序之间换算。
+  lines.push('### 概览目标')
+  lines.push('')
+  lines.push(delivery.goalSummary === '' ? '（还没有写概览目标）' : delivery.goalSummary)
+  lines.push('')
   lines.push('### 预期产出')
   lines.push('')
   lines.push(delivery.expectedOutput === '' ? '（还没有写预期产出）' : delivery.expectedOutput)

@@ -1238,7 +1238,7 @@ try {
     const blockedReason = typeof blocked.reason === 'string' ? blocked.reason : ''
     check('and the refusal is the INCOMPLETE one, not the missing one',
       /GOAL_INCOMPLETE/.test(blockedReason), blockedReason)
-    for (const field of ['验收标准', '范围边界', '已知约束']) {
+    for (const field of ['概览目标', '预期产出', '验收标准', '范围边界', '已知约束']) {
       check(`and names the missing field "${field}"`, blockedReason.includes(field), blockedReason)
     }
 
@@ -1253,9 +1253,13 @@ try {
     // result is checked now, because a helper that fails quietly is how a test starts
     // describing something other than what it claims.
     let d = domain.emptyDelivery(sessionId)
-    // 预期产出是第四个必填项（用户要求「Agent 填写」，所以宿主真的要求它）。它和下面两条
-    // 不同：不需要人批，Agent 一次 setExpectedOutput 就补齐 —— 所以它写在这里，而不是
-    // 「再等一个提案」。
+    // 概览目标与预期产出是**最先要求的两项**（用户要求「Agent 填写」，所以宿主真的要求它们）。
+    // 它们和下面两条不同：不需要人批，Agent 一次 setGoalSummary / setExpectedOutput 就补齐 ——
+    // 所以它们写在这里，而不是「再等一个提案」。
+    //
+    // 两格都要写：它们回答的是**两个**问题（这个目标在做什么 / 做完会得到什么），所以
+    // 写了一个不会把另一个也带过 —— 那正是这段 fixture 现在要一起钉住的东西。
+    d = domain.applyDeliveryOp(d, 'setGoalSummary', { goalSummary: '把首页做出来，三种状态都走通。' }, { at: Date.now() }).delivery
     d = domain.applyDeliveryOp(d, 'setExpectedOutput', { expectedOutput: '一个能打开的首页，三种状态都走通。' }, { at: Date.now() }).delivery
     d = domain.applyDeliveryOp(d, 'addAcceptance', { description: '首页可访问', mandatory: true }, { at: Date.now() }).delivery
     d = domain.applyDeliveryOp(d, 'proposeScope', { excluded: ['不做设置页'] }, { at: Date.now() }).delivery
@@ -1578,6 +1582,169 @@ try {
     eq('and counted as a change-driven injection', enforcement.stats().preflightOnChange, 1)
 
     eq('but an unchanged revision does not repeat', ((await step(1, 5)).messages || []).length, 0)
+  }
+  console.log('goal-enforce: turn observation reports WHICH files changed')
+  {
+    // `files` exists for one caller: the skill-miss challenge has to show the model the concrete
+    // files it changed. The path comes out of the call's own arguments — a JSON STRING on this
+    // machine's real logs (`runtime-routes.mjs` reads it the same way), an already-parsed object
+    // in a fixture — and the field name differs per tool.
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'write', arguments: '{"file_path":"luzzy-page/src/pages/goal.js","content":"x"}' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+      { type: 'tool/call', data: { callId: 'c2', name: 'edit', arguments: '{"file_path":"luzzy-page/src/app/app.js","old_string":"a","new_string":"b"}' } },
+      { type: 'tool/result', data: { message: { id: 'c2' } } },
+      // `str_replace_editor` names it `path`, not `file_path`.
+      { type: 'tool/call', data: { callId: 'c3', name: 'str_replace_editor', arguments: { path: 'luzzy-page/src/styles/components.css' } } },
+      { type: 'tool/result', data: { message: { id: 'c3' } } },
+      // The same file twice is ONE entry: repeats say "many edits", not "many files".
+      { type: 'tool/call', data: { callId: 'c4', name: 'edit', arguments: '{"file_path":"luzzy-page/src/app/app.js"}' } },
+      { type: 'tool/result', data: { message: { id: 'c4' } } },
+    ]
+    const observed = enforce.observeTurn(fakeAgent('sess-files', events))
+    eq('the changed files are reported', observed.files.length, 3)
+    eq('in write order, de-duplicated',
+      observed.files.join(' | '),
+      'luzzy-page/src/pages/goal.js | luzzy-page/src/app/app.js | luzzy-page/src/styles/components.css')
+
+    // THE NEGATIVE CONTROL, and the one that matters: reads must not count. Every turn reads
+    // files, so a list that included them would be noise — and the challenge would then fire on
+    // turns that changed nothing, which is the fastest way to turn a question into a lecture.
+    const readsOnly = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'r1', name: 'read', arguments: '{"file_path":"luzzy-page/src/pages/goal.js"}' } },
+      { type: 'tool/result', data: { message: { id: 'r1' } } },
+      { type: 'tool/call', data: { callId: 'r2', name: 'grep', arguments: '{"path":"luzzy-page/src"}' } },
+      { type: 'tool/result', data: { message: { id: 'r2' } } },
+    ]
+    eq('a read-only turn reports NO files',
+      enforce.observeTurn(fakeAgent('sess-reads', readsOnly)).files.length, 0)
+
+    // A FAILED write changed nothing, so it names nothing either.
+    const failedWrite = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'f1', name: 'write', arguments: '{"file_path":"x"}' } },
+      { type: 'tool/result', data: { error: { name: 'X', code: 'E' }, message: { id: 'f1' } } },
+    ]
+    eq('a FAILED write contributes no path',
+      enforce.observeTurn(fakeAgent('sess-failed-write', failedWrite)).files.length, 0)
+
+    // An unreadable path must not lose the WRITE. The two facts are independent, and the
+    // trigger only depends on the second one — a parse failure that also dropped `wroteFiles`
+    // would make the challenge silently depend on how a tool spells its arguments.
+    const unparsable = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'u1', name: 'write', arguments: 'not json' } },
+      { type: 'tool/result', data: { message: { id: 'u1' } } },
+    ]
+    const odd = enforce.observeTurn(fakeAgent('sess-odd', unparsable))
+    eq('an unparsable call still counts as a write', odd.wroteFiles, true)
+    eq('but contributes no name', odd.files.length, 0)
+
+    // Capped: past eight the block stops being "this turn's work" and starts being a diff
+    // summary (§83).
+    const many = [{ type: 'turn/start', data: { turn: 1 } }]
+    for (let n = 0; n < 12; n += 1) {
+      many.push({ type: 'tool/call', data: { callId: `m${n}`, name: 'write', arguments: `{"file_path":"f${n}.js"}` } })
+      many.push({ type: 'tool/result', data: { message: { id: `m${n}` } } })
+    }
+    eq('the list is capped at 8', enforce.observeTurn(fakeAgent('sess-many', many)).files.length, 8)
+  }
+
+  console.log('goal-enforce: the skill-miss challenge states the fact, not a verdict')
+  {
+    const block = enforce.renderSkillMissChallenge([
+      'luzzy-page/src/pages/goal.js',
+      'luzzy-page/src/styles/components.css',
+    ])
+    check('it names the files it is asking about',
+      block.includes('luzzy-page/src/pages/goal.js') && block.includes('luzzy-page/src/styles/components.css'))
+    check('and calls activateSkill by name', block.includes('activateSkill'))
+    check('and spells out the four fields that registration needs',
+      ['name', 'description', 'purpose', 'source'].every((field) => block.includes(field)), block)
+    check('and offers the second exit: say why no class applies', block.includes('都对不上'))
+    check('and states that it is not a refusal', block.includes('这不是拒绝'))
+
+    // THE assertion this renderer exists for. §39 puts "which category is this?" in the MODEL's
+    // column, so a block that answered it would be the harness judging its own question — and it
+    // would be wrong exactly where the judgement was hard, which is the only place it matters.
+    const verdicts = ['设计类', '网页开发', 'HTML 开发', '应该命中', '显然', '属于']
+    const said = verdicts.filter((word) => block.includes(word))
+    check(`and does NOT name a category for the model (said: ${said.join('/') || 'nothing'})`, said.length === 0, block)
+  }
+
+  console.log('goal-enforce: answering skill-miss while writing files gets asked ONCE')
+  {
+    // The measured hole this closes: several turns in this project's own session answered
+    // skillCheck="none" while editing this page's JS and CSS, which §1.1.6's own list calls
+    // 设计类 / HTML 网页开发 work. Nothing noticed, because nothing compared the answer to the
+    // turn it was given in. This asks — once — and does not judge.
+    const paths = freshPaths()
+    const sessionId = 'sess-skill-miss'
+    const ctx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const chain = chainHarness(paths, sessionId)
+    // This turn really did change the workspace.
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'edit', arguments: '{"file_path":"luzzy-page/src/pages/goal.js","old_string":"a","new_string":"b"}' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+    ]
+    const agent = fakeAgent(sessionId, events)
+    // `decision.messages` is the whole claimed set with the notice spliced in, so counting it
+    // would count the user's own message too. Count only OUR messages — the ones stamped
+    // `source.kind === 'plugin'` — and read the text off that one.
+    const notices = (decision) => (decision.messages ?? []).filter((message) => message?.source?.kind === 'plugin')
+    const noticeText = (decision) => String(notices(decision)[0]?.content?.[0]?.text ?? '')
+    const openTurn = (messageId, turn, step) => {
+      const claimed = { role: 'user', id: messageId, content: '接着做' }
+      return fire(ctx, 'agent/pre-step', { agent, messages: [claimed], turn, step, signal: {} },
+        { kind: 'enter', messages: [claimed] })
+    }
+    // The REAL argument shape is `{action, payload:{…}}` — `goal-tools.mjs` commits the op with
+    // `args.payload ?? {}` (L233), and that is the object the tool's own schema declares. The
+    // older helpers in this file spread the payload flat, which is enough for the GATE (it only
+    // reads `args.action`) but not for post-execute, which reads the answer itself.
+    const judge = (payload) => {
+      chain.persist((d) => domain.applyDeliveryOp(d, 'judgeChain', payload, { at: Date.now() }).delivery)
+      return fire(ctx, 'tools/post-execute',
+        { name: 'goal_delivery', arguments: { action: 'judgeChain', payload }, agent },
+        { isError: false, content: [{ type: 'text', text: 'ok: x\n{"status":"ok"}' }] },
+        { kind: 'accept' })
+    }
+    // 一个只属于这条挑战的说法。不能用「没命中」当标记：链自己就会把这一格的状态写出来，
+    // 于是「链的通知里带了这句话」会被读成「挑战注入了」。
+    const MARK = '二选一'
+
+    await openTurn('sm-1', 1, 1)
+    // …and the model answers that no skill class applies. That answer is knowable only at the
+    // moment the call SUCCEEDS, which is why post-execute records it there and not here.
+    await judge({ goalMatch: 'none', skillCheck: 'none' })
+    eq('post-execute records the chain answer it just saw',
+      enforce.readCounters(sessionId).lastSkillCheck, 'none')
+
+    const challenged = await openTurn('sm-1', 1, 2)
+    const text = noticeText(challenged)
+    eq('the skill-miss challenge is injected on the next step', notices(challenged).length, 1)
+    check(`and the challenge is a question of the two ways out (${MARK})`, text.includes(MARK), text)
+    check('and the challenge names the path the turn changed', text.includes('luzzy-page/src/pages/goal.js'), text)
+    check('and the challenge points at activateSkill', text.includes('activateSkill'), text)
+    eq('and the challenge is counted once', enforcement.stats().skillMissChallenged, 1)
+
+    const again = await openTurn('sm-1', 1, 3)
+    eq('the same turn is never asked the challenge twice', notices(again).length, 0)
+
+    // A NEW turn asks again — and, just as important, does NOT ask before the model has spoken
+    // in it. Without the turn-boundary reset, last turn's answer would be challenged in a turn
+    // whose chain answer does not exist yet.
+    const nextTurn = await openTurn('sm-2', 2, 1)
+    check('a new turn does NOT carry last turn\'s answer forward', !noticeText(nextTurn).includes(MARK), noticeText(nextTurn))
+    await judge({ goalMatch: 'none', skillCheck: 'none' })
+    const secondAsk = await openTurn('sm-2', 2, 2)
+    check('a new turn asks the challenge again', noticeText(secondAsk).includes(MARK), noticeText(secondAsk))
+    eq('and the challenge counter says two', enforcement.stats().skillMissChallenged, 2)
   }
 } finally {
   for (const root of tempRoots) {

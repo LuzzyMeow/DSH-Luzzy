@@ -62,6 +62,31 @@
       LZ.Card.btnBar([{ label: '在视窗里读', attrs: 'data-viewer="expected" data-viewer-title="预期产出"' }])
   }
 
+  /**
+   * 概览目标：卡片最上面那一格，Agent 写的「这个目标在做什么」，一段话。
+   *
+   * 它**顶掉**的是原来那份目标全文引用块。原文一个字都没删 —— 完整的那份在「完整计划」
+   * 视窗的第 1 节里，而这一格回答的是另一个问题：先给我一句话，让我知道这东西在干什么。
+   *
+   * 三处刻意的选择：
+   *   1. 与 `expectedOutputBlock` 同一套皮（`.metricLabel` + Markdown 输出），因为它们是上下
+   *      相邻的两格，长得不一样会让人以为其中一个不属于这里；
+   *   2. 上限 600 字、由 domain 硬拒（超了不截断），所以**不给视窗入口** —— 它按定义就是一段
+   *      能当场读完的话，再套一层视窗只是把「读完它」变成一次点击；
+   *   3. 没写就照实说没写，**不拿目标原文顶上** —— 那一格是 Agent 的回答，拿正文顶替会让页面
+   *      看起来已经答过了，于是没有人会回来写它（预期产出踩过同一个坑）。
+   */
+  function goalSummaryBlock(view) {
+    if (view.delivery === null || view.delivery === undefined) return ''
+    const text = view.delivery.goalSummary || ''
+    const heading = '<div class="metricLabel">概览目标</div>'
+    if (text === '') {
+      return heading +
+        '<p class="rowSub">还没有写。这一格要一段话 —— 这个目标在做什么。</p>'
+    }
+    return heading + LZ.Markdown.render(text)
+  }
+
   /* ---------------------------------------------------------------- 目标概览 */
 
   function overviewBlock(view) {
@@ -94,7 +119,10 @@
       LZ.StatusBadge.fromStatus(view.health) +
       '</div>'
 
-    const objective = LZ.Format.objectiveText(goal.objective)
+    // 卡片最上面是**概览目标**（Agent 写的一段话），它顶掉的是原来那份目标全文引用块。
+    // 原文一个字都没删：完整的那份在「完整计划」视窗的第 1 节里，那里是「看全文」该去的地方，
+    // 而这张卡是抬头看一眼。
+    const summary = goalSummaryBlock(view)
     const expected = expectedOutputBlock(view)
 
     // 卡片头**不再重复阶段**。
@@ -113,7 +141,7 @@
 
     return LZ.Card.card({
       title: '目标概览',
-      body: head + objective + expected + meta + blocked +
+      body: head + summary + expected + meta + blocked +
         LZ.Card.btnBar([
           { label: '刷新', id: 'goalRefresh' },
           { spacer: true },
@@ -397,7 +425,8 @@
       count: readiness.missing.length === 0 ? '齐了，可以动手' : readiness.missing.length + ' 项还没有',
       sub: '这几项没齐之前，Agent 的工具调用会被拒——不是故障，是启动协议。' +
         '「等你确认」的算已经答过，它不会卡在那里等你。' +
-        '「预期产出」是唯一不需要你批的：Agent 自己写一段话就完了 —— 但它不写就一直缺着。',
+        '「概览目标」和「预期产出」是仅有的两格不需要你批的：Agent 自己写一段话就完了 ——' +
+        ' 但它们不写就一直缺着。',
       body: body,
     })
   }

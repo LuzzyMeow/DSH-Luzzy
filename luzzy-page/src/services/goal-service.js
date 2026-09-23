@@ -196,6 +196,11 @@
       // 拿 target 的 objective 来顶替是最容易顺手做、也最坏的一种「补」：它会让页面看起来
       // 已经填过了，而 Agent 从来没有回答过这个问题。
       expectedOutput: delivery.expectedOutput || '',
+      // 概览目标：Agent 写的「这个目标在做什么」，一段话，比预期产出短。
+      //
+      // 它与预期产出是**两个问题**（抬头一句 vs 对结果的承诺），所以是两个字段而不是一个的两种
+      // 措辞。同样原样透传：空就让它空着，页面负责说「还没有写」，这里不替它补。
+      goalSummary: delivery.goalSummary || '',
       // 状态链的两条分支：这里只投影**事实**（Agent 答过什么、什么时候答的），
       // 页面负责把它说成中文。判断本身归 Agent，这一层不替它补默认值。
       chain: {
@@ -253,8 +258,20 @@
 
     const fields = []
 
-    // 预期产出：Agent 直接写，**没有「等你确认」这一态** —— 它不需要人批，不写就是没写。
-    // 这也是它必须与另外三格并列显示的原因：它是 Agent 自己的责任，不能藏在别处。
+    // 概览目标与预期产出：都是 Agent 直接写，**没有「等你确认」这一态** —— 它们不需要人批，
+    // 不写就是没写。这也是它们必须与另外三格并列显示的原因：它们是 Agent 自己的责任，
+    // 不能藏在别处。
+    //
+    // 两格相邻且顺序固定（概览目标在前）—— 因为它们在卡片上就是上下相邻的两格，而
+    // 「还缺什么」这张表是照着卡片读的。顺序反了会让人以为这是两个不同的地方。
+    const summary = view.goalSummary || ''
+    fields.push({
+      name: '概览目标',
+      state: summary === '' ? 'missing' : 'settled',
+      detail: summary === '' ? '' : summary.slice(0, 40) + (summary.length > 40 ? '…' : ''),
+      how: 'setGoalSummary',
+    })
+
     const expected = view.expectedOutput || ''
     fields.push({
       name: '预期产出',

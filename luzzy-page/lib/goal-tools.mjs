@@ -69,6 +69,10 @@ const ACTION_DESCRIPTIONS = {
   setEvidence: 'payload: {id, summary?, kind?, detail?, ref?} — EDIT a recorded piece of evidence in place. Use when the summary or reference was wrong; do NOT add a second row describing the same proof.',
   removeEvidence: 'payload: {id} — DELETE an evidence row. Any criterion pointing at it is detached, so no dangling E-nnn reference is left behind.',
   setFocus: 'payload: {focus} — the ONE thing most worth attention right now. Must be specific, not "continue the project".',
+  setGoalSummary: 'payload: {goalSummary} — 概览目标：**这个目标在做什么**，用**一段话**概括（上限 600 字，比预期产出短）。' +
+    '它顶掉的是概览卡里那份两万五千字的目标原文 —— 原文一个字都不删，完整的那份在「完整计划」视窗里，' +
+    '这一格只决定卡片最上面先给人看哪句话。所以：**别复述原文**、**别写成任务清单**、**别写成结果承诺**' +
+    '（那是 setExpectedOutput）。必须是**一段**：用空行分成两段的会被拒。页面按 Markdown 渲染。',
   setExpectedOutput: 'payload: {expectedOutput} — 预期产出：这个目标**做完之后到底会得到什么**，用**一段话**概括。' +
     '它回答「最终交付长什么样」，不回答「接下来做什么」（那是 setNext）——写成品、写用户能拿到的东西，不要写成任务清单。' +
     '必须是**一段**：用空行分成两段的会被拒。目标阶段一变就更新它，否则页面显示的是上一阶段的承诺。' +

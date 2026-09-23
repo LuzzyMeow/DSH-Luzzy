@@ -374,6 +374,24 @@ function counterFor(sessionId) {
       chainBlocks: 0,
       skillBlocks: 0,
       /**
+       * 模型自己答的那一格 `skillCheck`，以及「这一轮为它问过没有」。
+       *
+       * 为什么要在这里留一份：`skillCheck` 是**模型的判断**（§39），答 "none" 合法且不花任何
+       * 代价 —— 而那正是漏洞的形状。要问一句「你答了没命中，可这一轮改了文件」，就得知道它
+       * 答的是什么。值在 `tools/post-execute` 处理 `judgeChain` 成功那一步顺手记下（原文就在
+       * 手里），预检那一步直接读这两个字段，**不再去读交付状态**：同一次调用写的值，再读一次
+       * 盘只换来一次 IO 和一个不一致窗口。
+       *
+       * 两者都是**运行时事实**（和 `chainPending` 同一类），所以只在内存里：
+       * 一轮答一次，"none" 也只在这**一轮**内值得追问。跨重启丢失是可接受的 —— 那时
+       * `chainPending` 也一并回到未答，模型本来就要重答一遍。
+       *
+       * `skillMissChallenged` 存的是轮次号（不是布尔）：新一轮要能重新问一次，而「第几轮问过」
+       * 比「问过没有」多一个信息 —— 它让「上一轮问过」不会被当成「这一轮问过」。
+       */
+      lastSkillCheck: null,
+      skillMissChallenged: null,
+      /**
        * 已经把哪几条待确认提案推进对话里了（P-nnn）。
        *
        * 这是**运行时事实**，和 `chainPending` 同一类，所以存在内存里而不是交付状态里：
@@ -812,6 +830,48 @@ export function renderSkillGateRefusal(toolName, entry) {
 }
 
 /**
+ * The challenge for "answered skill-miss, but this turn changed files".
+ *
+ * WHY THIS EXISTS. §39 splits the chain's two branches: the harness supplies the deterministic
+ * half, the model supplies the judgement. `skillCheck` is a judgement — so answering "none" is
+ * legal and, until now, cost nothing at all. That is exactly the hole. Measured in this project's
+ * own session: several turns answered "none" while editing this page's own JS, its stylesheet and
+ * its app shell — which §1.1.6's own list calls 设计类 / HTML 网页开发 work. Nothing ever noticed,
+ * because nothing compared the answer to the turn it was given in.
+ *
+ * It does NOT close the hole by judging. §38/§39 forbid that: the harness cannot tell a CSS change
+ * that IS design work from one that is not, and a deterministic rule that guessed would be wrong
+ * exactly where it mattered. So it does the other half of the split — it puts the FACT the model
+ * could not have in front of the model ("you wrote these files and said no class applied") and
+ * names the two concrete ways to discharge it. `activateSkill` is spelled out because a fix has to
+ * be a call the model can actually make; naming the class here would be doing the judging.
+ *
+ * NOT A GATE. Answering "none" still refuses nothing and holds back no tool. It is a question,
+ * asked at most once per turn — which is why it goes through the injection path rather than
+ * through `tools/pre-execute`.
+ *
+ * @param {string[]} files - paths this turn wrote (already de-duplicated and capped).
+ * @returns {string} the challenge block.
+ */
+export function renderSkillMissChallenge(files) {
+  const shown = files.map((path) => `    - ${path}`).join('\n')
+  return [
+    `这一轮技能清单那一格你答的是「没命中」，但同一轮确实写过文件（${files.length} 处）：`,
+    '',
+    shown,
+    '',
+    '这两件事同时成立时，二选一，别就这么过去：',
+    '',
+    '  1. 如果其中某一类对得上，就登记它 —— ' +
+      `${DELIVERY_TOOL}(action="activateSkill", payload={name, description, purpose, source})，四项都要写。`,
+    '  2. 如果确实哪一类都对不上，就说清为什么：这些改动是「十七类」之外的什么活。',
+    '',
+    '这不是拒绝：答「没命中」依然合法，也没有任何工具因为这一步被拦住。只是「写过文件」和' +
+      '「没命中」摆在一起时，两者里至少有一个值得再看一眼。',
+  ].join('\n')
+}
+
+/**
  * Read a "this exchange is not a task" declaration out of a `goal_delivery` call.
  *
  * The model supplies the JUDGEMENT (§39) and this reads it out as a fact, so the gate never
@@ -913,6 +973,15 @@ export function installEnforcement(ctx, deps) {
     chainBlocked: 0,
     skillBlocked: 0,
     chainJudged: 0,
+    /**
+     * 「答了没命中、但这一轮确实改了文件」被追问过多少次。
+     *
+     * 与 `skillBlocked` 是**两件事**，所以是两个计数：那道门数的是「答了命中却不登记」，
+     * 这一个数的是「答了没命中却改了文件」。后者不拦任何东西 —— 追问是成本，不是拒绝 ——
+     * 所以它唯一的价值就是**让「到底问过没有」变成一个可以看的数字**：恒为零说明这条挑战
+     * 从来没触发过，而它本该在每一轮这么答的时候都触发一次。
+     */
+    skillMissChallenged: 0,
   }
 
   // ---- layer 4: orient the model before it works ---------------------------
@@ -985,6 +1054,12 @@ export function installEnforcement(ctx, deps) {
         // 新的一轮 = 链要重新答一遍。这是「每次对话都要执行状态链」的运行时那一半：
         // 注入负责说，这个标记负责**锁**（门在 tools/pre-execute 里）。
         entry.chainPending = true
+        // 上一轮的技能答案与「问过没有」一起作废。不清的话会出现最坏的一种：上一轮答了
+        // 没命中，这一轮**还没答**就先被追问一遍 —— 追问的是上一轮的答案，而模型这一轮
+        // 什么都没说。清理本身是确定的：`lastSkillCheck` 只在 judgeChain 成功那一步写入，
+        // 而这一轮还没答，它就该是空。
+        entry.lastSkillCheck = null
+        entry.skillMissChallenged = null
       }
 
       const resolved = liveGoalFor(ctx, agent)
@@ -1053,7 +1128,26 @@ export function installEnforcement(ctx, deps) {
       // 链该不该说：新一轮要说，本轮还没答（比如刚被门拦下）也要说。
       const chainDue = newTurn || entry.chainPending
 
-      if (!chainDue && !goalDue && nudge === null) return decision
+      // ---- 技能漏判挑战：这一轮改过文件，却说「没有命中任何技能清单」---------
+      //
+      // 见 `renderSkillMissChallenge` 的长说明。这里是**触发条件**：本轮答了 none，且本轮确实
+      // 写过文件。两件事必须同时成立 —— 只答 none 而没干活（纯问答）不该被追问，改了文件而
+      // 没答 none（答了命中、或答了匹配）也不该。
+      //
+      // 代价纪律（§83）：`observeTurn` 只在「这一轮答过 none」时才调用，而那是一个不常发生的
+      // 分支；其余情况下这一步是两次内存读取。也不去读交付状态 —— `lastSkillCheck` 就是同一次
+      // judgeChain 写进交付状态的那个值的原文。
+      //
+      // 一次一轮：`skillMissChallenged` 存轮次号，真的注入了才落（下面 parts 那一段）。所以
+      // 「读了一遍但发现不满足」不会被误记成问过 —— 那种情况的意思正是「这一轮还没写过文件」，
+      // 而后面的步骤真写了，条件就会再进来一次。
+      let skillMiss = null
+      if (entry.lastSkillCheck === 'none' && entry.skillMissChallenged !== turn) {
+        const work = observeTurn(agent)
+        if (work.files.length > 0) skillMiss = work.files
+      }
+
+      if (!chainDue && !goalDue && nudge === null && skillMiss === null) return decision
 
       // 三块（链 / 目标 / 技能）说的是同一份状态，只读一次：读两遍除了多一次 IO，还会在两次读
       // 之间留一个不一致的窗口 —— 而这是每轮都要走的路径。
@@ -1103,6 +1197,17 @@ export function installEnforcement(ctx, deps) {
         if (summary !== '状态链') summary = changed ? '目标已更新' : '目标状态'
       }
       if (nudge !== null) parts.push(nudge)
+
+      // 技能漏判挑战排在这里（链 / 目标 / 提醒之后，提案之前）。理由只有一条：**摘要那一行
+      // 的优先级**。链在的时候摘要是「状态链」，目标在的时候是「目标状态」—— 这两句比「技能
+      // 漏判」更能说明这一步为什么有内容，所以挑战放在它们后面，让它的摘要只在**没有别的
+      // 理由**时才顶上来。
+      if (skillMiss !== null) {
+        entry.skillMissChallenged = turn
+        stats.skillMissChallenged += 1
+        parts.push(renderSkillMissChallenge(skillMiss))
+        if (summary === '没有目标') summary = '技能漏判'
+      }
 
       // ---- 待确认提案：推到对话里，而不是躺在页面上等 ------------------------
       //
@@ -1352,8 +1457,15 @@ export function installEnforcement(ctx, deps) {
       if (args.action !== 'judgeChain') return decision
       if (readToolStatus(decision.content ?? result?.content) !== 'ok') return decision
       entry.chainPending = false
-      entry.chainJudged += 1
+      entry.chainJudgements += 1
       stats.chainJudged += 1
+      // 顺手记下模型答的**技能那一格**：预检那一步要据此问一句「你答了没命中，可这一轮改了
+      // 文件」。原文就在手里，存一份比让预检再去读一次交付状态便宜，也不会有两次读之间的
+      // 不一致窗口。取值只认那两个合法值，其余（字段写错、拼错）一律当没答过 —— 保守方向是
+      // **不追问**：追问是成本，不是门。
+      const payload = typeof args.payload === 'object' && args.payload !== null ? args.payload : {}
+      entry.lastSkillCheck =
+        payload.skillCheck === 'hit' || payload.skillCheck === 'none' ? payload.skillCheck : null
       return decision
     })
   }
@@ -1500,8 +1612,20 @@ export function installEnforcement(ctx, deps) {
  * needs the whole turn's history and the log is the only place that has it. Only successful
  * mutating calls count: a failed `write` changed nothing.
  *
+ * `files` is what this turn actually WROTE, in order, de-duplicated, capped. One caller needs it:
+ * the skill-miss challenge, whose whole value is showing the model the concrete files it changed
+ * while claiming no skill class applied — a generic "you did work" would be something the model
+ * already believes. Reads are deliberately not collected: every turn reads files, so a list that
+ * included them would be noise, and the challenge would then fire on turns that changed nothing.
+ *
+ * The path comes out of the call's own arguments, which on a real session log is a JSON STRING —
+ * `runtime-routes.mjs` reads `data.arguments` the same way, against this machine's real logs. The
+ * field name differs per tool (`write`/`edit` use `file_path`, `str_replace_editor` uses `path`),
+ * so it tries the known keys instead of assuming one. A call whose path cannot be read still
+ * counts as a write — that is `wroteFiles`' job, and it must not depend on parsing succeeding.
+ *
  * @param {object} agent - the live agent.
- * @returns {{changed: boolean, wroteFiles: boolean, ranCommand: boolean, toolCalls: number}}
+ * @returns {{changed: boolean, wroteFiles: boolean, ranCommand: boolean, toolCalls: number, files: string[]}}
  */
 export function observeTurn(agent) {
   let events
@@ -1510,7 +1634,9 @@ export function observeTurn(agent) {
   } catch {
     events = undefined
   }
-  if (!Array.isArray(events)) return { changed: false, wroteFiles: false, ranCommand: false, toolCalls: 0 }
+  if (!Array.isArray(events)) {
+    return { changed: false, wroteFiles: false, ranCommand: false, toolCalls: 0, files: [] }
+  }
 
   // Scan backwards to the last turn boundary rather than tracking state: the log is the
   // authority, and a counter kept across turns would drift after a compaction.
@@ -1527,6 +1653,7 @@ export function observeTurn(agent) {
   let wroteFiles = false
   let ranCommand = false
   let toolCalls = 0
+  const files = []
   for (let index = start; index < events.length; index += 1) {
     const event = events[index]
     if (event?.type === 'tool/result' && event.data?.error !== undefined && typeof event.data?.message?.id === 'string') {
@@ -1539,10 +1666,56 @@ export function observeTurn(agent) {
     toolCalls += 1
     if (typeof event.data?.callId === 'string' && failed.has(event.data.callId)) continue
     const name = event.data?.name
-    if (name === 'write' || name === 'edit' || name === 'str_replace_editor') wroteFiles = true
-    else if (name === 'bash' || name === 'pwsh' || name === 'run_code') ranCommand = true
+    if (name === 'write' || name === 'edit' || name === 'str_replace_editor') {
+      wroteFiles = true
+      const target = callTargetPath(event.data)
+      if (target !== '' && !files.includes(target) && files.length < MAX_OBSERVED_FILES) files.push(target)
+    } else if (name === 'bash' || name === 'pwsh' || name === 'run_code') ranCommand = true
     else if (MUTATING_TOOLS.has(name)) wroteFiles = true
   }
 
-  return { changed: wroteFiles || ranCommand, wroteFiles, ranCommand, toolCalls }
+  return { changed: wroteFiles || ranCommand, wroteFiles, ranCommand, toolCalls, files }
+}
+
+/**
+ * How many paths the observation carries. A cap rather than a filter: the challenge needs to be
+ * recognisable as "this turn's work", and eight paths already say that. Past it the list would
+ * grow into a diff summary, which is not what the block is for (§83: small fixed overhead).
+ */
+const MAX_OBSERVED_FILES = 8
+
+/**
+ * Argument keys that name a file, most specific first. Not a guess: `write` and `edit` take
+ * `file_path`, `str_replace_editor` takes `path`. The rest are the obvious spellings a tool of
+ * this family could use, and a key that matches nothing simply yields no name — the write is
+ * still counted.
+ */
+const FILE_ARG_KEYS = Object.freeze(['file_path', 'path', 'file', 'filename', 'target_file', 'notebook_path'])
+
+/**
+ * The file a tool call names, or '' when this call does not name one.
+ *
+ * Reads the arguments defensively in both shapes — a JSON string (what the session log holds) and
+ * an already-parsed object (what a test fixture tends to hold). A parse failure is NOT an error
+ * here: it degrades to "this call named no file", which the caller already has to handle.
+ *
+ * @param {object} data - a `tool/call` event's payload.
+ * @returns {string} the path, or ''.
+ */
+function callTargetPath(data) {
+  const raw = data?.arguments
+  let args = raw
+  if (typeof raw === 'string') {
+    try {
+      args = JSON.parse(raw)
+    } catch {
+      return ''
+    }
+  }
+  if (typeof args !== 'object' || args === null) return ''
+  for (const key of FILE_ARG_KEYS) {
+    const value = args[key]
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  }
+  return ''
 }

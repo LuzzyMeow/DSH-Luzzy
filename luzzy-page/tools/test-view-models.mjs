@@ -209,12 +209,16 @@ check('the service is what builds the view model', goalService.includes('functio
   check('extracted readiness', typeof readiness === 'function', 'extraction failed — the assertions below would be vacuous')
 
   if (typeof readiness === 'function') {
-    // 四格：预期产出 / 验收标准 / 范围边界 / 已知约束。
+    // 五格：概览目标 / 预期产出 / 验收标准 / 范围边界 / 已知约束。
     //
-    // 预期产出是第四个，而且它与另外三格**不同类**：它不需要人批（`setExpectedOutput` 直接
-    // 写），所以它连「等你确认」这一态都没有。页面与门必须给出同一个数字 —— 门那一侧数的是
+    // 前两格与另外三格**不同类**：它们不需要人批（`setGoalSummary` / `setExpectedOutput` 直接
+    // 写），所以连「等你确认」这一态都没有。页面与门必须给出同一个数字 —— 门那一侧数的是
     // `missingGoalFields`，这里数的是同一件事的投影。
+    //
+    // 顺序也是断言：概览目标在前、预期产出紧跟其后，因为卡片上就是**上面那句抬头、下面那句
+    // 承诺**。这张表是照着卡片读的，顺序反了会让人以为它们是两个不同的地方。
     const empty = {
+      goalSummary: '',
       expectedOutput: '',
       acceptance: [],
       scope: { included: [], excluded: [] },
@@ -222,20 +226,38 @@ check('the service is what builds the view model', goalService.includes('functio
       proposals: [],
     }
     const r0 = readiness(empty)
-    check('nothing filled → all four missing', r0.missing.length === 4, JSON.stringify(r0.missing))
+    check('nothing filled → all five missing', r0.missing.length === 5, JSON.stringify(r0.missing))
     check('and it is not ready', r0.ready === false)
+    check('and 概览目标 is one of them', r0.missing.includes('概览目标'), JSON.stringify(r0.missing))
     check('and 预期产出 is one of them', r0.missing.includes('预期产出'), JSON.stringify(r0.missing))
+
+    // 两格都在最前面，且概览目标在预期产出之上 —— 与卡片上的上下关系一致。
+    check('both agent-written fields sit at the top, 概览目标 first',
+      r0.fields[0].name === '概览目标' && r0.fields[1].name === '预期产出',
+      r0.fields.map((f) => f.name).join(' / '))
 
     const withAcceptance = readiness({ ...empty, acceptance: [{ id: 'AC-1' }] })
     check('one acceptance is enough for that field', !withAcceptance.missing.includes('验收标准'), JSON.stringify(withAcceptance.missing))
-    check('but the other three still block', withAcceptance.missing.length === 3)
+    check('but the other four still block', withAcceptance.missing.length === 4)
 
-    // 预期产出自己可以被 Agent 一次补齐 —— 这是它与其他三格最实际的区别。
+    // 概览目标自己可以被 Agent 一次补齐 —— 它与另外三格最实际的区别，而且它同样不能有
+    // 「等你确认」这一态（Agent 自己能写的格子不该显示成在等人）。
+    const withSummary = readiness({ ...empty, goalSummary: '把 Settings 改造成目标看板。' })
+    check('one 概览目标 clears that field', !withSummary.missing.includes('概览目标'), JSON.stringify(withSummary.missing))
+    check('and it is reported as settled, never as "waiting for you"',
+      withSummary.fields.find((f) => f.name === '概览目标').state === 'settled',
+      JSON.stringify(withSummary.fields.find((f) => f.name === '概览目标')))
+    check('and it is offered the 概览目标 op as its "how"',
+      withSummary.fields.find((f) => f.name === '概览目标').how === 'setGoalSummary',
+      JSON.stringify(withSummary.fields.find((f) => f.name === '概览目标')))
+
+    // 预期产出同理，且**两格互不顶替**：写了一段概览目标不等于回答了「做完会得到什么」。
     const withExpected = readiness({ ...empty, expectedOutput: '一个能双击打开的看板。' })
     check('one 预期产出 clears that field', !withExpected.missing.includes('预期产出'), JSON.stringify(withExpected.missing))
     check('and it is reported as settled, never as "waiting for you"',
       withExpected.fields.find((f) => f.name === '预期产出').state === 'settled',
       JSON.stringify(withExpected.fields.find((f) => f.name === '预期产出')))
+    check('writing one does NOT clear the other', withExpected.missing.includes('概览目标'), JSON.stringify(withExpected.missing))
 
     // THE DECISIVE CASE: a pending proposal on scope must count as answered.
     const proposed = readiness({
@@ -245,7 +267,7 @@ check('the service is what builds the view model', goalService.includes('functio
     check('a pending scope proposal is NOT counted as missing', !proposed.missing.includes('范围边界'), JSON.stringify(proposed.missing))
     check('and it is reported as "waiting for you"', proposed.fields.find((f) => f.name === '范围边界').state === 'proposed',
       JSON.stringify(proposed.fields.find((f) => f.name === '范围边界')))
-    check('and it still counts toward readiness (the gate opens on it)', proposed.missing.length === 3, JSON.stringify(proposed.missing))
+    check('and it still counts toward readiness (the gate opens on it)', proposed.missing.length === 4, JSON.stringify(proposed.missing))
 
     // An ADOPTED proposal is settled, not pending — it must not read as "still waiting".
     const adopted = readiness({
@@ -257,6 +279,7 @@ check('the service is what builds the view model', goalService.includes('functio
 
     // Everything settled → ready, and no field left unsaid.
     const full = readiness({
+      goalSummary: '把 Settings 改造成目标看板。',
       expectedOutput: '一个能双击打开的看板。',
       acceptance: [{ id: 'AC-1' }],
       scope: { included: ['a'], excluded: [] },
@@ -269,6 +292,7 @@ check('the service is what builds the view model', goalService.includes('functio
     // 负向控制：把「待批算答过」这条去掉，上面那条断言必须失效。
     const strict = (view) => {
       const missing = []
+      if ((view.goalSummary || '') === '') missing.push('概览目标')
       if ((view.expectedOutput || '') === '') missing.push('预期产出')
       if (view.acceptance.length === 0) missing.push('验收标准')
       if (view.scope.included.length + view.scope.excluded.length === 0) missing.push('范围边界')
@@ -276,8 +300,8 @@ check('the service is what builds the view model', goalService.includes('functio
       return { missing, ready: missing.length === 0 }
     }
     const strictResult = strict({ ...empty, proposals: [{ id: 'P-1', field: 'scope', status: 'pending', pending: true }] })
-    check('the naive version (ignoring proposals) reports 4 missing, so the assertion above can fail',
-      strictResult.missing.length === 4 && proposed.missing.length === 3,
+    check('the naive version (ignoring proposals) reports 5 missing, so the assertion above can fail',
+      strictResult.missing.length === 5 && proposed.missing.length === 4,
       `naive=${strictResult.missing.length} real=${proposed.missing.length}`)
   }
 }

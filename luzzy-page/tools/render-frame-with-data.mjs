@@ -109,6 +109,13 @@ function buildGoalFixture() {
     ['setTaskStatus', { id: 'T-003', status: 'completed' }],
     ['setFocus', { focus: '完成 /api/tasks 接入，并验证 loading / empty / error 三种状态' }],
     ['setNext', { next: ['给 fetch 加超时并在超时时显示 error 态', '用真实工作区跑一次窄屏走查', '把 Dashboard 的截图补进证据'] }],
+    // 概览目标：卡片最上面那一格。与预期产出同理，**必须带 Markdown 标记** —— 截图要看的是
+    // 「这一段被当成 Markdown 渲染了」，一段纯文本的 fixture 证明不了这件事。它还得够长，
+    // 长到能看出它**顶掉了**原来那份两万五千字的目标原文（而不是缩在角落里）。
+    ['setGoalSummary', {
+      goalSummary: '把 Settings 页改造成一个**目标看板**：`/api/tasks` 的数据接进来，四张卡片各自把 ' +
+        'loading / empty / error 三种状态都走通，并且在这一页上能一眼看出「还缺什么、做到哪里、下一步做什么」。',
+    }],
     // 预期产出：一段话，且**带 Markdown 标记** —— 截图要看的就是「它被当成 Markdown 渲染了」，
     // 一段纯文本的 fixture 证明不了这件事。
     ['setExpectedOutput', {

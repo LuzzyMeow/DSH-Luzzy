@@ -6,7 +6,7 @@
  * that never fires both leave every other suite green, and the只 difference is that the user's
  * 「每次对话都要执行状态链」 stopped happening.
  *
- * Six arms, because they fail independently:
+ * Sixteen arms across eight mutations, because they fail independently:
  *
  *   armA  the chain gate never refuses            -> 「答完才放行」不再是门
  *   armB  the plugin notice counts as a new turn  -> 链在每个 step 自己续期
@@ -17,10 +17,17 @@
  *                                                 -> 逼模型为了让门放行而把 skillCheck 改成 none
  *   armF  the turn filter narrowed back to `plugin`
  *                                                 -> 宿主的 goal_state 注入被当成人在说话
+ *   armG  the skill-miss challenge never fires    -> 「答了没命中、却改了文件」重新变成一句没人问的话
+ *   armH  the challenge is asked on every step    -> 追问退化成说教
  *
  * armE 与 armF 都是**实测出来的**，不是想出来的。同一个回合里连着被拦 5 次，其中 3 次是
  * `read`（门的文本要求先读的正文），另外几次是宿主的 `<goal_state>` 注入被当成了新一轮。
  * 合起来是两道自伤：一道逼人说假话，一道让门每步续期。
+ *
+ * armG 与 armH 也是实测出来的，而且就是本项目的会话本身：连续几轮把 `skillCheck` 答成 "none"，
+ * 同时改的正是这个页面自己的 JS 与 CSS —— 按 §1.1.6 的清单，那是设计类 / HTML 网页开发。
+ * 没有任何东西发现过，因为没有任何东西把「答了什么」和「这一轮做了什么」放在一起看。
+ * **注意这一臂钉的不是门**：答 "none" 依然合法、不拦任何工具。它钉的是「有人问过」。
  *
  * Usage: node tools/prove-chain-gate.mjs
  */
@@ -58,6 +65,27 @@ function runSuite(sandbox) {
     return { exitedNonZero: true, output: `${error.stdout ?? ''}${error.stderr ?? ''}` }
   }
 }
+
+/**
+ * The suite's own FAIL lines.
+ *
+ * The prefix is load-bearing. Assertion labels may contain the word FAILED
+ * (`a FAILED judgement does not open the gate`) and those lines read `ok` when they pass, so
+ * filtering on `includes('FAIL')` counts them — which is how the first version of arm G got its
+ * own reading wrong. When counting failing lines, the counting itself has to be right.
+ */
+function failLines(output) {
+  return output.split('\n').filter((line) => line.startsWith('  FAIL '))
+}
+
+/**
+ * Measured, not guessed — each is the number of FAIL lines the arm actually produced.
+ *
+ * arm G removes the trigger, so every assertion that names the challenge dies with it.
+ * arm H removes the once-per-turn guard, so the same turn gets asked again on the next step.
+ */
+const G_EXPECTED_FAILS = 7
+const H_EXPECTED_FAILS = 2
 
 function sandboxWith(label, mutate) {
   const sandbox = mkdtempSync(join(tmpdir(), 'luzzy-chain-proof-'))
@@ -172,6 +200,54 @@ try {
     expectRed('F', sandbox, /goal-state injection is not a new turn|workspace-instruction injection/i,
       'it passed with only the plugin kind excluded (the shape of the real bug)')
   }
+  // ---- arm G: the skill-miss challenge never fires ------------------------------------
+  //
+  // 这是本轮实测出来的漏洞的形状：`skillCheck` 是模型的判断（§39），所以答 "none" 合法、
+  // 而且**一度不花任何代价**。代价为零的判断等于没有判断 —— 本项目自己的会话里连续几轮答
+  // "none" 同时改这个页面的 JS / CSS（§1.1.6 的清单里那是设计类 / HTML 网页开发），没有任何
+  // 东西发现过。把触发条件整个拿掉（`skillMiss` 恒为 null），断言必须红。
+  //
+  // 数失败行数，不是只看 PASS/FAIL：这一臂要证明的正是「问过」这件事**有可数的断言在守**。
+  {
+    const sandbox = sandboxWith('G', (s) => s.replace(
+      `      let skillMiss = null
+      if (entry.lastSkillCheck === 'none' && entry.skillMissChallenged !== turn) {
+        const work = observeTurn(agent)
+        if (work.files.length > 0) skillMiss = work.files
+      }`,
+      '      const skillMiss = null',
+    ))
+    sandboxes.push(sandbox)
+    const result = runSuite(sandbox)
+    check('G: the suite goes red', result.exitedNonZero, 'it passed with the challenge removed')
+    // `  FAIL ` 这个前缀是有意的：套件里有断言名带「FAILED」（`a FAILED judgement does not
+    // open the gate`）而它**通过**，用 `includes('FAIL')` 会把那几行 ok 一起数进来 —— 上一版
+    // 就是这么把自己的读数搞错的。测失败行数的时候，连测法本身也要对。
+    const lines = failLines(result.output)
+    check(`G: and exactly the ${G_EXPECTED_FAILS} challenge assertions fail (${lines.length} FAIL lines)`,
+      lines.length === G_EXPECTED_FAILS, lines.join(' | '))
+    check('G: and every failing assertion names the challenge, so the arm is precise',
+      lines.length > 0 && lines.every((l) => /challenge/.test(l)), lines.join(' | '))
+    for (const line of lines) console.log(`       ${line.trim()}`)
+  }
+
+  // ---- arm H: the challenge is asked on every step ------------------------------------
+  //
+  // 追问一次是提问，追问每一步是说教。把「这一轮问过没有」那半条条件拿掉，同一个回合的后
+  // 每一步都会再问一遍 —— 「问过一次」的那条断言必须红。
+  {
+    const sandbox = sandboxWith('H', (s) => s.replace(
+      "      if (entry.lastSkillCheck === 'none' && entry.skillMissChallenged !== turn) {",
+      "      if (entry.lastSkillCheck === 'none') {",
+    ))
+    sandboxes.push(sandbox)
+    const result = runSuite(sandbox)
+    check('H: the suite goes red', result.exitedNonZero, 'it passed with the challenge repeating every step')
+    const lines = failLines(result.output)
+    check(`H: and exactly the ${H_EXPECTED_FAILS} "asked twice" assertions fail (${lines.length} FAIL lines)`,
+      lines.length === H_EXPECTED_FAILS, lines.join(' | '))
+    for (const line of lines) console.log(`       ${line.trim()}`)
+  }
 } finally {
   for (const sandbox of sandboxes) {
     try {
@@ -187,4 +263,4 @@ if (failures > 0) {
   console.log(`FAIL — ${failures} of ${checks} assertion(s)`)
   process.exit(1)
 }
-console.log(`PASS — ${checks} assertions (both chain gates fail when they should)`)
+console.log(`PASS — ${checks} assertions (both chain gates and the skill-miss challenge fail when they should)`)

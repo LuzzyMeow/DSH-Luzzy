@@ -546,7 +546,20 @@ if (entry) {
 
     // ② 目标正文走查看器，不再在页面里展开。
     check('the overview uses the shared objective renderer', overview.includes('objectiveText(goal.objective)'))
-    check('and the goal centre does too', source.includes('LZ.Format.objectiveText(goal.objective)'))
+    // 目标页**不再**把目标正文铺进卡片：最上面换成 Agent 写的一段「概览目标」。正文一个字都没删
+    // —— 完整的那份在「完整计划」视窗的第 1 节（`renderGoalMarkdown` 原样输出 runtimeGoal.objective，
+    // 见 `luzzy-page/lib/goal-domain.mjs` 的 `## 1. 预期目标`）。
+    //
+    // 断言钉的是**这个分工**，不是「那一行还在不在」：上一版钉的是那一行，于是分工一换它就报假失败。
+    check('and the goal centre hands the full objective off to the plan viewer instead of spreading it in the card',
+      !source.includes('LZ.Format.objectiveText(') && source.includes('goalSummaryBlock(view)'))
+    // 而顶上那一段是 Agent 自己的字段、**按 Markdown 渲染**，不是把目标正文顶上去充数。
+    check('and the summary block renders the Agent\'s own field as Markdown',
+      /function goalSummaryBlock\(view\)[\s\S]*?LZ\.Markdown\.render\(text\)/.test(source))
+    // 空着就照实说没写。拿目标正文顶替会让页面看起来已经答过了，于是没有人会回来写它 ——
+    // 预期产出踩过同一个坑，所以两格写的是同一句话。
+    check('and an unwritten summary says so instead of borrowing the objective',
+      source.includes('还没有写。这一格要一段话 —— 这个目标在做什么。'))
 
     const format = readFileSync(join(PLUGIN_ROOT, 'src', 'components', 'Format.js'), 'utf8')
     check('the renderer lives in the shared Format module', format.includes('function objectiveText('))
