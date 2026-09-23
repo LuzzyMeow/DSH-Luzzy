@@ -14,24 +14,40 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..')
 const OUT = join(ROOT, 'lib', 'client.js')
 
-// The committed artifact, straight out of git.
+// The committed artifacts, straight out of git.
+//
+// TWO halves, and the distinction matters: `lib/client.js` is the built CLIENT bundle (the frame
+// the browser receives), while `lib/goal-enforce.mjs` and friends are HOST modules that are not
+// built into it at all. A marker for a gate therefore cannot be looked for in the client bundle —
+// my first version of this list did exactly that and reported a false NO for three markers that
+// were committed and correct.
 const committed = execFileSync('git', ['show', 'HEAD:luzzy-page/lib/client.js'], { cwd: join(ROOT, '..'), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+const committedHost = ['goal-enforce.mjs', 'goal-domain.mjs', 'goal-tools.mjs']
+  .map((name) => execFileSync('git', ['show', `HEAD:luzzy-page/lib/${name}`], { cwd: join(ROOT, '..'), encoding: 'utf8' }))
+  .join('\n')
 
 console.log('=== does the committed artifact carry this round\'s work? ===')
-for (const [label, needle] of [
-  ['objectiveText (objective renderer)', 'objectiveText'],
+for (const [label, needle, where] of [
+  ['objectiveText (objective renderer)', 'objectiveText', 'client'],
   // 针里不能带引号：帧文档在产物里是 JSON 字符串字面量，属性值写成 data-viewer=\"objective\"，
   // 带引号的针永远搜不到（第一次跑就是这样报了个假 NO）。
-  ['the viewer handoff button', 'data-viewer'],
-  ['viewerText (pre-wrap body)', 'viewerText'],
-  ['dialogContent (single scroll layer)', 'dialogContent'],
-  ['white-space: pre-wrap', 'white-space: pre-wrap'],
-  ['readiness (还缺什么)', 'function readiness('],
-  ['suppressed health badge', 'toneOf(view.health) === LZ.StatusBadge.toneOf(goal.phase)'],
-  ['sessionGeneration (切会话修复)', 'sessionGeneration'],
-  ['shouldLoad (force 修复)', 'function shouldLoad('],
+  ['the viewer handoff button', 'data-viewer', 'client'],
+  ['viewerText (pre-wrap body)', 'viewerText', 'client'],
+  ['dialogContent (single scroll layer)', 'dialogContent', 'client'],
+  ['white-space: pre-wrap', 'white-space: pre-wrap', 'client'],
+  ['readiness (还缺什么)', 'function readiness(', 'client'],
+  ['suppressed health badge', 'toneOf(view.health) === LZ.StatusBadge.toneOf(goal.phase)', 'client'],
+  ['sessionGeneration (切会话修复)', 'sessionGeneration', 'client'],
+  ['shouldLoad (force 修复)', 'function shouldLoad(', 'client'],
+  // 状态链与激活技能清单（这一轮）：两边都要带着，否则装上的是上一版。
+  ['state chain line', 'data-chain', 'client'],
+  ['activation list block', 'goalSkills', 'client'],
+  ['chain gate refusal', 'STATE_CHAIN_REQUIRED', 'host'],
+  ['skill gate refusal', 'SKILL_LIST_EMPTY', 'host'],
+  ['judgeChain op', 'judgeChain', 'host'],
 ]) {
-  console.log(`  ${committed.includes(needle) ? 'yes' : 'NO '} ${label}`)
+  const haystack = where === 'host' ? committedHost : committed
+  console.log(`  ${haystack.includes(needle) ? 'yes' : 'NO '} ${label}  (${where})`)
 }
 
 // Two fresh builds, compared line by line.
