@@ -14,13 +14,18 @@
 // Usage: shoot({ page: '/abs/path.html', out: '/abs/path.png', height: 1300 })
 
 import { execFileSync } from 'node:child_process'
-import { basename, extname, join } from 'node:path'
+import { basename, extname, join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 
 export const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 
 export function shoot({ page, out, height = 1300, width = 1200, virtualTimeMs = 6000 }) {
-  const profile = join(tmpdir(), `luzzy-shot-profile-${basename(out, extname(out))}`)
+  // `out` 必须先转成绝对路径。交给 Edge 的相对路径是按**它自己的**工作目录解析的，
+  // 而那个目录和调用者的 cwd 不是一回事。实测结果是最坏的那种：函数返回 true、
+  // 控制台打印「shot: xxx.png」、**文件根本没落盘**，而且 stdio 被吞掉所以一个字都不报。
+  // 属于本文件开头第 1、2 条同一族，一次堵掉。
+  const target = resolve(out)
+  const profile = join(tmpdir(), `luzzy-shot-profile-${basename(target, extname(target))}`)
   const run = () => execFileSync(
     EDGE,
     [
@@ -31,7 +36,7 @@ export function shoot({ page, out, height = 1300, width = 1200, virtualTimeMs = 
       '--hide-scrollbars',
       `--virtual-time-budget=${virtualTimeMs}`,
       `--window-size=${width},${height}`,
-      `--screenshot=${out}`,
+      `--screenshot=${target}`,
       `file:///${page.replace(/\\/g, '/')}`,
     ],
     { timeout: 90_000, stdio: ['ignore', 'ignore', 'ignore'] },

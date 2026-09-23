@@ -559,12 +559,23 @@
     }
 
     document.addEventListener('click', function (event) {
-      const node = event.target.closest('[data-action], [data-viewer], [data-tab]:not([role="tab"]), [data-window], [data-mode], [data-proposal], #goalArtifactOn, #goalArtifactOff, #goalArtifactWrite, #goalReconcile, #goalRawToggle, #goalRefresh, #goalRetry, #overviewRefresh, #overviewRetry, #runtimeRetry, #agentRetry, #agentGotoPreset, #systemRetry')
+      const node = event.target.closest('[data-action], [data-viewer], [data-tab]:not([role="tab"]), [data-window], [data-mode], [data-goalsection], [data-proposal], #goalArtifactOn, #goalArtifactOff, #goalArtifactWrite, #goalReconcile, #goalRawToggle, #goalRefresh, #goalRetry, #overviewRefresh, #overviewRetry, #runtimeRetry, #agentRetry, #agentGotoPreset, #systemRetry')
       if (node === null) return
 
       // 图表控件：只影响趋势图，纯前端，不发请求。
       if (node.dataset.window !== undefined) { state.window = node.dataset.window; render(); return }
       if (node.dataset.mode !== undefined) { state.mode = node.dataset.mode; render(); return }
+
+      // 目标中心的分区：同样纯前端、不发请求。
+      //
+      // 切完必须把滚动位置归零。不归零是个很容易漏的坑：从「记录」切回「概览」时页面
+      // 停在原来的高度上，用户看到的是新内容的中段，而他会读成「点了没反应」。
+      if (node.dataset.goalsection !== undefined) {
+        state.goalSection = node.dataset.goalsection
+        render()
+        if (contentNode !== null) contentNode.scrollTop = 0
+        return
+      }
 
       // 提案：采纳与不采纳都是**人类操作**，走专门的 op。
       if (node.dataset.proposal !== undefined) {
@@ -848,6 +859,9 @@
     content: contentNode,
     openViewer: openViewer,
     isRawOpen: function () { return state.rawOpen },
+    // 目标中心的分区。默认「概览」在这里现算，而不是写进 state 的初始值 —— state 的声明在
+    // 别处，而这是唯一读它的地方；同一个默认值维护两份，迟早会漂成不一样。
+    goalSection: function () { return state.goalSection === undefined ? 'overview' : state.goalSection },
     rawState: function () { return { text: state.rawText, loading: state.rawLoading } },
     switchTab: switchTab,
     askForSession: askForSession,

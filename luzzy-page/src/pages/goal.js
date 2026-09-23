@@ -22,6 +22,14 @@
   const esc = LZ.Card.esc
   const badge = LZ.StatusBadge.badge
 
+  /** 目标中心的四个分区。顺序即阅读顺序：现在怎么样 → 要做什么 → 凭什么 → 一路上变过什么。 */
+  const GOAL_SECTIONS = [
+    ['overview', '概览'],
+    ['plan', '计划'],
+    ['evidence', '证据'],
+    ['record', '记录'],
+  ]
+
   /* ---------------------------------------------------------------- 预期产出 */
 
   /**
@@ -105,7 +113,7 @@
 
     return LZ.Card.card({
       title: '目标概览',
-      body: head + objective + meta + blocked +
+      body: head + objective + expected + meta + blocked +
         LZ.Card.btnBar([
           { label: '刷新', id: 'goalRefresh' },
           { spacer: true },
@@ -397,24 +405,63 @@
   function chainLine(view) {
     const chain = view.delivery.chain
     if (chain === null || chain === undefined) return ''
+
+    // 括号里那截是解释，塞进格子会撑破 —— 标题取短的，完整的一句挂到 SVG 的 title 上。
+    const short = function (label) { return String(label === undefined ? '' : label).split('（')[0] }
     const tone = function (value) {
       if (value === 'matched' || value === 'hit') return 'success'
       if (value === 'none') return 'idle'
       return 'waiting'
     }
-    // 外层 `driftLine` 只借它的垂直留白，内层 `badgeRow` 只借它的横排（flex + wrap + gap）。
+
+    // 第三个格子的状态：**按 host 的门序推**（链 → 目标 → 技能），判据全部来自宿主已经算好的
+    // 投影 —— chain.judged 是状态链自己的字段，view.readiness 是「还缺什么」用的同一个
+    // （host 的 missingGoalFields），技能的登记数来自 delivery.skills。
     //
-    // 第一版把每段文字包在 `.driftText` 里 —— 那是个**容器**（`display:flex`），于是四段各自
-    // 占一行，整行散成五行。截图里一眼就看得见，而断言全绿：**布局问题只有看图才知道**
-    // （§5.30「布局要量不要看」的反面：视觉的事就得看）。
+    // 这一层**不发明规则**（§P8：GUI 只是投影）。顺序尤其不能自己排：图上写「放行」而工具
+    // 那边被拒，用户就没有可信的东西可看了。查不出来就说「等」，绝不猜一个好看的颜色。
+    const skills = view.delivery.skills || []
+    const readiness = view.readiness
+    const tool = (function () {
+      if (!chain.judged) return { state: 'waiting', text: '等状态链' }
+      if (readiness !== null && readiness !== undefined && readiness.ready !== true) {
+        const n = (readiness.missing || []).length
+        return { state: 'blocked', text: '拦住 · 目标缺 ' + n + ' 项' }
+      }
+      if (chain.skillCheck === 'hit' && skills.length === 0) return { state: 'blocked', text: '拦住 · 技能未登记' }
+      return { state: 'success', text: '放行' }
+    })()
+
+    const node = function (x, index, title, state, text, full) {
+      return '<g class="chainNode" data-state="' + state + '">' +
+        '<title>' + esc(full) + '</title>' +
+        '<rect class="chainBox" x="' + x + '" y="8" width="212" height="60" rx="8"/>' +
+        '<circle class="chainDot" cx="' + (x + 20) + '" cy="28" r="5"/>' +
+        '<text class="chainLabel" x="' + (x + 34) + '" y="33">' + esc(index + ' ' + title) + '</text>' +
+        '<text class="chainValue" x="' + (x + 20) + '" y="54">' + esc(text) + '</text>' +
+        '</g>'
+    }
+    const arrow = function (x) {
+      return '<line class="chainEdge" x1="' + x + '" y1="38" x2="' + (x + 28) + '" y2="38"/>' +
+        '<path class="chainHead" d="M' + (x + 28) + ' 38 l-7 -4 v8 z"/>'
+    }
+
+    const label = '执行链：目标分支 ' + chain.goalLabel + '；技能分支 ' + chain.skillLabel + '；工具' + tool.text
+    const svg =
+      '<svg class="chainSvg" viewBox="0 0 720 76" width="100%" height="76" role="img" ' +
+      'aria-label="' + esc(label) + '">' +
+      node(0, '①', '目标分支', tone(chain.goalMatch), short(chain.goalLabel), chain.goalLabel) +
+      arrow(212) +
+      node(254, '②', '技能分支', tone(chain.skillCheck), short(chain.skillLabel), chain.skillLabel) +
+      arrow(466) +
+      node(508, '③', '工具放行', tool.state, tool.text, '按 host 的门序：状态链 → 目标 → 技能') +
+      '</svg>'
+
     return '<div class="driftLine" data-chain="' + (chain.judged ? 'judged' : 'pending') + '">' +
-      '<div class="badgeRow">' +
-      badge(tone(chain.goalMatch), '目标分支') +
-      '<span>' + esc(chain.goalLabel) + '</span>' +
-      badge(tone(chain.skillCheck), '技能分支') +
-      '<span>' + esc(chain.skillLabel) + '</span>' +
-      (chain.at === '' ? '' : '<span class="segLabel">· ' + esc(chain.at) + '</span>') +
-      '</div>' +
+      svg +
+      '<p class="rowSub" style="margin:6px 0 0">' +
+      (chain.at === '' ? '本轮还没判断' : '判断于 ' + esc(chain.at)) +
+      '</p>' +
       '</div>'
   }
 
@@ -611,37 +658,69 @@
       })
     }
 
-    const parts = [
-      overviewBlock(view),
-      readinessBlock(view),
-      driftLine(view),
-      chainLine(view),
-      skillBlock(view),
-      proposalsBlock(view),
-      focusBlock(view),
-      '<div class="grid" data-cols="2">' +
-        '<div class="stack">' + acceptanceBlock(view) + taskBlock(view) + '</div>' +
-        '<div class="stack">' + evidenceBlock(view) + '</div>' +
-        '</div>',
-      decisionBlock(view),
-      historyBlock(view),
-      '<div class="grid" data-cols="2">' +
-        '<div class="stack">' + blockersBlock(view) + scopeBlock(view) + '</div>' +
-        '<div class="stack">' + integrityBlock(view) + '</div>' +
-        '</div>',
-      artifactBlock(view),
-      rawBlock(view),
-      (view.warnings.length > 0
-        ? LZ.Card.card({
-          title: '读取提示',
-          count: view.warnings.length + ' 条',
-          body: '<ul class="nextList">' + view.warnings.map(function (warning) {
-            return '<li>' + esc(warning) + '</li>'
-          }).join('') + '</ul>',
-        })
-        : ''),
-    ]
-    return parts.join('')
+    // 分区。这一页原来一次铺十几张卡，用户直接提过「太长」——而长的代价是**找不到东西**：
+    // 想知道「下一步是什么」要滚过验收标准、任务树、证据、决策、历史……
+    //
+    // 分成四段之后，一屏只回答一类问题：
+    //   概览  现在什么状态、为什么动不了
+    //   计划  要做成什么、被拆成了什么
+    //   证据  凭什么说做到了
+    //   记录  一路上变过什么
+    //
+    // 默认停在「概览」：那是打开这一页最常问的问题。分区的状态存在 app 的 state 里，
+    // 因为页面每次数据回来都会重渲染 —— 存在 DOM 上会在第一次轮询之后丢掉。
+    const section = LZ.App.goalSection()
+    const groups = {
+      overview: [
+        overviewBlock(view),
+        readinessBlock(view),
+        driftLine(view),
+        chainLine(view),
+        skillBlock(view),
+        proposalsBlock(view),
+        focusBlock(view),
+      ],
+      plan: [
+        '<div class="grid" data-cols="2">' +
+          '<div class="stack">' + acceptanceBlock(view) + taskBlock(view) + '</div>' +
+          '<div class="stack">' + scopeBlock(view) + '</div>' +
+          '</div>',
+      ],
+      evidence: [
+        evidenceBlock(view),
+        decisionBlock(view),
+        blockersBlock(view),
+        integrityBlock(view),
+      ],
+      record: [
+        historyBlock(view),
+        artifactBlock(view),
+        rawBlock(view),
+      ],
+    }
+
+    // 分区条。复用按钮组，不新造控件 —— 一个页面里出现第二种「切换」的视觉语言，
+    // 读的人就得先学会两套规则。
+    const nav = LZ.Card.btnBar(GOAL_SECTIONS.map(function (pair) {
+      return {
+        label: pair[1],
+        variant: pair[0] === section ? 'btnSmall btnPrimary' : 'btnSmall',
+        attrs: 'data-goalsection="' + pair[0] + '" aria-pressed="' + String(pair[0] === section) + '"',
+      }
+    }))
+
+    const body = (groups[section] === undefined ? groups.overview : groups[section]).join('')
+    const warnings = view.warnings.length > 0
+      ? LZ.Card.card({
+        title: '读取提示',
+        count: view.warnings.length + ' 条',
+        body: '<ul class="nextList">' + view.warnings.map(function (warning) {
+          return '<li>' + esc(warning) + '</li>'
+        }).join('') + '</ul>',
+      })
+      : ''
+
+    return nav + body + warnings
   }
 
   LZ.GoalPage = { render: render }

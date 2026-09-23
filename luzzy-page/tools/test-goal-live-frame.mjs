@@ -259,12 +259,57 @@ try {
     shown.includes('LIVE-MARKER') ? 'marker found' : 'no marker at all')
 
   check('the current focus from the plan is on screen', shown.includes('LIVE-MARKER 当前焦点文案'))
-  check('an acceptance criterion is on screen', shown.includes('LIVE-MARKER 验收项甲'))
-  check('a task is on screen', shown.includes('LIVE-MARKER 任务一'))
+
+  // 验收标准与任务现在住在「计划」分区里 —— 目标中心一次只铺一屏（用户提过「太长」）。
+  // 所以这两条断言要先**真的点一下分区**：真鼠标、走命中测试（§5.29）。顺带把「分区切换」
+  // 本身也验了：一个只在源码里存在的分区条，和没有分区是同一种结果。
+  const planAt = await page.click('[data-goalsection="plan"]')
+  check('the 计划 section was clicked with real input', planAt.x > 0,
+    `at ${Math.round(planAt.x)},${Math.round(planAt.y)}`)
+  await new Promise((r) => setTimeout(r, 400))
+  const planned = String(await page.evaluate('document.body.innerText') ?? '')
+
+  check('an acceptance criterion is on screen', planned.includes('LIVE-MARKER 验收项甲'))
+  check('a task is on screen', planned.includes('LIVE-MARKER 任务一'))
 
   // The fraction is the part that distinguishes a live count from a hard-coded shell.
   check('the verified fraction is computed, not hard-coded', shown.includes('1 / 3') || shown.includes('1/3'),
     (shown.match(/[\d]+\s*\/\s*[\d]+/g) ?? []).slice(0, 3).join(' ') || 'no fraction rendered')
+
+  // --- Markdown 预览视窗（用户要的是「可滑动查看完整目标/计划」）-------------------
+  //
+  // 只有**真的把它点开**才算验过。三条缺一不可：视窗开出来了、内容被当 Markdown 渲染
+  // 而不是原样文字、并且它**真的能滚**（「支持滑动查看」就是这最后一条）。
+  //
+  // 入口按钮长在「概览」卡上，而上面刚切去了「计划」——先切回来。这一句不是仪式：
+  // 少了它，`[data-viewer="plan"]` 在文档里根本不存在，而失败信息只会说
+  //「element not visible or absent」，读起来像是按钮坏了。
+  await page.click('[data-goalsection="overview"]')
+  await new Promise((r) => setTimeout(r, 300))
+
+  const viewerAt = await page.click('[data-viewer="plan"]')
+  check('the 完整计划 button was clicked with real input', viewerAt.x > 0,
+    `at ${Math.round(viewerAt.x)},${Math.round(viewerAt.y)}`)
+  await new Promise((r) => setTimeout(r, 1500))
+
+  const dialog = String(await page.evaluate('document.body.innerText') ?? '')
+  check('the markdown viewer opened', dialog.includes('完整目标与计划'))
+
+  // 渲染过 vs 原文：渲染器把 `## 1. 预期目标` 变成 <h2>1. 预期目标</h2>，所以页面上不该
+  // 再出现井号。井号还在 = 它把 Markdown 当纯文本贴出来了，那正是这一件要避免的结果。
+  check('and the plan was RENDERED, not pasted as raw text',
+    dialog.includes('1. 预期目标') && !dialog.includes('## 1. 预期目标'))
+
+  const scrollable = await page.evaluate(
+    `(() => {
+       const el = document.querySelector('.dialogContent')
+       if (el === null) return null
+       return { overflows: el.scrollHeight > el.clientHeight + 4, height: el.clientHeight, content: el.scrollHeight }
+     })()`,
+  )
+  check('and the viewer content actually scrolls',
+    scrollable !== null && scrollable.overflows === true,
+    scrollable === null ? 'no .dialogContent' : `${scrollable.content}px in ${scrollable.height}px`)
 
   check('the page did NOT report the goal as unavailable', !shown.includes('运行时 Goal 不可用'))
 

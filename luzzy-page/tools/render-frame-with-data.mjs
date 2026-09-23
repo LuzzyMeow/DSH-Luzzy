@@ -109,6 +109,12 @@ function buildGoalFixture() {
     ['setTaskStatus', { id: 'T-003', status: 'completed' }],
     ['setFocus', { focus: '完成 /api/tasks 接入，并验证 loading / empty / error 三种状态' }],
     ['setNext', { next: ['给 fetch 加超时并在超时时显示 error 态', '用真实工作区跑一次窄屏走查', '把 Dashboard 的截图补进证据'] }],
+    // 预期产出：一段话，且**带 Markdown 标记** —— 截图要看的就是「它被当成 Markdown 渲染了」，
+    // 一段纯文本的 fixture 证明不了这件事。
+    ['setExpectedOutput', {
+      expectedOutput: '一个能在真实工作区里打开、**不报错**的目标看板：四张卡片各自把 loading / empty / error ' +
+        '三种状态都走通，`pnpm test` 与全部回归测试通过，并留下四张截图作为证据。',
+    }],
     ['addDecision', { decision: '复用现有 Dashboard 组件而不是新写一套', reason: '保持项目内的界面一致性', alternatives: '重新设计一版 Dashboard', rejectedBecause: '超出本次范围' }],
     ['addDecision', { decision: '错误态用页面内联提示，不用弹窗', reason: '原生对话框会夺走窗口焦点，关掉之后输入框会失效' }],
     ['addBlocker', { code: 'awaiting-api-fixture', message: '等待确认 /api/tasks 在空数据时返回 [] 还是 404' }],

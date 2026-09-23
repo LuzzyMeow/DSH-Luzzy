@@ -96,6 +96,29 @@
   .badge[data-state='running'] .badgePulse { animation: none; }
 }
 
+/* 执行链：三个格子 + 两条箭头。状态色**复用 .badge 的同一套 --lz-state-\* 变量**，
+   所以「图上是什么颜色」与「徽标是什么颜色」永远是同一个答案 —— 一张图和一枚徽标
+   对同一件事给出两种颜色，比没有图更糟。
+
+   状态不只用颜色表达：格子里的那句文字（命中 / 未命中 / 等状态链 / 拦住 · 目标缺 N 项）
+   本身就是判据，颜色只是加强。这是 DESIGN.md 的 Do's 那条：不要只靠颜色表意。 */
+.chainSvg { display: block; width: 100%; max-width: 760px; height: auto; }
+.chainBox { fill: var(--lz-bg-container-secondary); stroke: var(--lz-border-secondary); stroke-width: 1; }
+.chainDot { fill: var(--lz-text-quaternary); }
+.chainLabel { fill: var(--lz-text); font-size: var(--lz-font-sm); font-weight: 600; }
+.chainValue { fill: var(--lz-text-secondary); font-size: var(--lz-font-sm); }
+.chainEdge { stroke: var(--lz-border); stroke-width: 1.5; }
+.chainHead { fill: var(--lz-border); }
+
+.chainNode[data-state='success'] .chainBox { stroke: var(--lz-state-success); }
+.chainNode[data-state='success'] .chainDot { fill: var(--lz-state-success); }
+.chainNode[data-state='blocked'] .chainBox { stroke: var(--lz-state-blocked); }
+.chainNode[data-state='blocked'] .chainDot { fill: var(--lz-state-blocked); }
+.chainNode[data-state='waiting'] .chainBox { stroke: var(--lz-state-waiting); }
+.chainNode[data-state='waiting'] .chainDot { fill: var(--lz-state-waiting); }
+.chainNode[data-state='idle'] .chainBox { stroke: var(--lz-border); }
+.chainNode[data-state='idle'] .chainDot { fill: var(--lz-text-quaternary); }
+
 /* 一行徽标组 */
 .badgeRow { display: flex; flex-wrap: wrap; align-items: center; gap: var(--lz-space-xs); }
 
