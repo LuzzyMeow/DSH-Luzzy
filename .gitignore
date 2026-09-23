@@ -31,3 +31,9 @@ logs/
 *cookies*
 *credential*
 *token*
+# `*token*` 是广谱拦截，方向是对的（宁可多拦，不可漏拦）—— 但它顺带拦住了
+# luzzy-page/src/styles/tokens.css，而那是设计 token，是 src/app/manifest.json 里
+# 第一个必需样式。被拦住时**没有任何提示**：文件明明在，构建却少一个样式表，
+# 而这件事要到克隆之后才会发现。所以给这一个文件开例外，而不是把广谱规则收窄 ——
+# 收窄规则会让真正的凭证从此漏过。
+!luzzy-page/src/styles/tokens.css

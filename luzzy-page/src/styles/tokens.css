@@ -1,0 +1,204 @@
+/* ============================================================ Luzzy 控制台 · 设计变量
+ *
+ * 单一真源。所有页面与组件只读这里的变量，不得就地写死颜色、字号、间距或圆角。
+ *
+ * 为什么帧里要自带一整套
+ * ----------------------
+ * iframe 是独立文档，CSS 自定义属性**不跨文档继承**。帧内写 var(--dsw-*) 而帧自己不定义
+ * 它们，会全部静默回退到兜底值——曾经 38 处引用、0 处定义，暗色模式下整页仍是浅色，
+ * 而且不报任何错。所以这里把整套定义下来。
+ *
+ * 分三层，职责不能混
+ * ------------------
+ *   1. --dsw-*   DSH 自己的 token 名。镜像到帧内，因为跨文档不继承。图表、Markdown 编辑器
+ *                等既有部件引用的是这一层，迁移期必须留着。
+ *   2. --lz-*    本控制台的语义层，建在第 1 层之上。**新代码只用这一层。**
+ *   3. 明暗两套  只换颜色。排版、间距、圆角、控件、动效在两种主题下完全一致
+ *                （reference/lobehub/DESIGN.dark.md 明确要求）。
+ *
+ * 一处刻意的纪律：命名一个不存在的 token 比不命名更糟
+ * ---------------------------------------------------
+ * 曾经写过 --dsw-alias-label-{error,warning,success}——实测那三个 token 在 DSH 里一个都
+ * 不存在，于是静默回退成硬编码色、两个主题同一套颜色，看起来却像"已经 token 化"了。
+ * 真实存在的是 --dsw-alias-state-{success,warn,error,business}-primary，而且暗色下换的是
+ * **色相**，不只是明度。下面第 1 层里的每一个名字都对着 DSH 前端 dist 核过。
+ */
+
+/* ============================================================ 第 1 + 2 层 · 明色 */
+:root {
+  /* ---- 第 1 层：DSH token 名（镜像） ---- */
+  --dsw-alias-label-primary: #080808;
+  --dsw-alias-label-secondary: #666666;
+  --dsw-alias-label-tertiary: #999999;
+  --dsw-alias-border-l2: #eeeeee;
+  --dsw-alias-border-l4: #dddddd;
+  --dsw-alias-bg-layer-1: #ffffff;
+  --dsw-alias-bg-layer-2: #f5f5f5;
+  --dsw-alias-interactive-bg-hover: rgba(0, 0, 0, 0.04);
+  --dsw-alias-markdown-code-block: rgba(0, 0, 0, 0.04);
+  --dsw-static-deepseek-500: #4d6bfe;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-warn-label: #dd8629;
+  --dsw-alias-state-error-primary: #ec1313;
+  --dsw-alias-state-business-primary: #4176e6;
+
+  /* ---- 第 2 层：页面基础 ---- */
+  --lz-bg-layout: #ffffff;
+  --lz-bg-container: #ffffff;
+  --lz-bg-container-secondary: #fbfbfb;
+  --lz-bg-elevated: #ffffff;
+  --lz-bg-spotlight: #dddddd;
+
+  --lz-border: #e3e3e3;
+  --lz-border-secondary: #eeeeee;
+
+  --lz-text: #080808;
+  --lz-text-secondary: #666666;
+  --lz-text-tertiary: #999999;
+  --lz-text-quaternary: #bbbbbb;
+
+  /* 填充与悬停：半透明，因此能叠在任何底色上 */
+  --lz-fill: rgba(0, 0, 0, 0.12);
+  --lz-fill-secondary: rgba(0, 0, 0, 0.06);
+  --lz-fill-tertiary: rgba(0, 0, 0, 0.03);
+  --lz-fill-quaternary: rgba(0, 0, 0, 0.015);
+
+  --lz-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --lz-code-bg: rgba(0, 0, 0, 0.04);
+
+  /* ---- 强调色 ----
+   * 默认是单色的（近黑），只有用户选了主色才带色相——这是 LobeHub 的既定设计。
+   * 帧内读不到用户主题主色，所以强调色用 DSH 的静态色。 */
+  --lz-primary: #080808;
+  --lz-accent: var(--dsw-static-deepseek-500);
+  --lz-accent-bg: rgba(77, 107, 254, 0.08);
+  --lz-focus-ring: var(--dsw-static-deepseek-500);
+
+  /* ---- 六个状态色 ----
+   * 执行中 / 成功 / 失败 / 等待 / 阻塞 / 未开始。每档配 -bg 浅底，两种主题下都有对比度。
+   * 纪律：颜色**永远不单独承载状态**——徽标必须同时有图标和文字。 */
+  --lz-state-running: var(--dsw-alias-state-business-primary);
+  --lz-state-running-bg: rgba(65, 118, 230, 0.1);
+  --lz-state-success: var(--dsw-alias-state-success-primary);
+  --lz-state-success-bg: rgba(34, 197, 94, 0.1);
+  --lz-state-failed: var(--dsw-alias-state-error-primary);
+  --lz-state-failed-bg: rgba(236, 19, 19, 0.1);
+  --lz-state-waiting: var(--dsw-alias-state-warn-primary);
+  --lz-state-waiting-bg: rgba(245, 158, 11, 0.12);
+  /* 阻塞与失败必须分得开：失败是终局，阻塞是「有人得去解一下」。
+     同色相靠更实的底、更粗的描边区分，图标与文字再各说一遍。 */
+  --lz-state-blocked: var(--dsw-alias-state-error-primary);
+  --lz-state-blocked-bg: rgba(236, 19, 19, 0.16);
+  --lz-state-idle: #999999;
+  --lz-state-idle-bg: rgba(0, 0, 0, 0.04);
+
+  /* ---- 间距：4px 阶梯 ---- 只用于间隙、内边距、外边距 */
+  --lz-space-xxs: 4px;
+  --lz-space-xs: 8px;
+  --lz-space-sm: 12px;
+  --lz-space-base: 16px;
+  --lz-space-md: 20px;
+  --lz-space-lg: 24px;
+  --lz-space-xl: 32px;
+
+  /* ---- 字号：12 / 14 / 16 / 20 / 24 五档 ----
+   * 没有 13px 这一档——设计系统明说那属于漂移，要归到 12 或 14。 */
+  --lz-font-sm: 12px;
+  --lz-font-base: 14px;
+  --lz-font-lg: 16px;
+  --lz-font-xl: 20px;
+  --lz-font-2xl: 24px;
+  --lz-line-height: 1.5714;
+  --lz-line-height-sm: 1.6667;
+  --lz-weight-strong: 600;
+
+  /* ---- 圆角：4 / 6 / 8 / 12 / 999 ---- 与间距是两套刻度，绝不互相借用 */
+  --lz-radius-xs: 4px;
+  --lz-radius-sm: 6px;
+  --lz-radius: 8px;
+  --lz-radius-lg: 12px;
+  --lz-radius-pill: 999px;
+
+  /* ---- 控件高度 ---- */
+  --lz-control-sm: 28px;
+  --lz-control: 36px;
+
+  /* ---- 层级 ----
+   * 层级先靠底色与描边做出来，阴影只留给真的浮起来的东西。 */
+  --lz-shadow-raised: 0 3px 1px -1px rgba(26, 26, 26, 0.06);
+  --lz-shadow-popover: 0 8px 16px -4px rgba(0, 0, 0, 0.2);
+  --lz-shadow-modal: 0 20px 20px -8px rgba(0, 0, 0, 0.24);
+
+  /* ---- 动效 ----
+   * 动效是澄清变化，不是装饰。状态变化 100–200ms，浮层最多 ~300ms。 */
+  --lz-duration-fast: 120ms;
+  --lz-duration: 180ms;
+  --lz-duration-slow: 260ms;
+  --lz-ease: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ---- 布局 ---- */
+  --lz-column-max: 1100px;
+  --lz-page-pad: var(--lz-space-lg);
+}
+
+/* ============================================================ 第 1 + 2 层 · 暗色
+ * 只换颜色。间距、字号、圆角、控件、动效与明色完全一致。
+ * 暗色下表面是「越往上越亮」，与明色相反——别把两级底色压成一层。 */
+:root[data-theme='dark'] {
+  /* ---- 第 1 层 ---- */
+  --dsw-alias-label-primary: #ffffff;
+  --dsw-alias-label-secondary: #aaaaaa;
+  --dsw-alias-label-tertiary: #6f6f6f;
+  --dsw-alias-border-l2: #1a1a1a;
+  --dsw-alias-border-l4: #2a2a2a;
+  --dsw-alias-bg-layer-1: #0d0d0d;
+  --dsw-alias-bg-layer-2: #1a1a1a;
+  --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.06);
+  --dsw-alias-markdown-code-block: rgba(255, 255, 255, 0.06);
+  --dsw-static-deepseek-500: #6b83ff;
+  --dsw-alias-state-success-primary: #22c55e;
+  --dsw-alias-state-warn-primary: #f59e0b;
+  --dsw-alias-state-warn-label: #dd8629;
+  --dsw-alias-state-error-primary: #f25a5a;
+  --dsw-alias-state-business-primary: #679efe;
+
+  /* ---- 第 2 层 ---- */
+  --lz-bg-layout: #000000;
+  --lz-bg-container: #0d0d0d;
+  --lz-bg-container-secondary: #070707;
+  --lz-bg-elevated: #1a1a1a;
+  --lz-bg-spotlight: #2d2d2d;
+
+  --lz-border: #202020;
+  --lz-border-secondary: #1a1a1a;
+
+  --lz-text: #ffffff;
+  --lz-text-secondary: #aaaaaa;
+  --lz-text-tertiary: #6f6f6f;
+  --lz-text-quaternary: #555555;
+
+  --lz-fill: rgba(255, 255, 255, 0.16);
+  --lz-fill-secondary: rgba(255, 255, 255, 0.1);
+  --lz-fill-tertiary: rgba(255, 255, 255, 0.06);
+  --lz-fill-quaternary: rgba(255, 255, 255, 0.02);
+
+  --lz-code-bg: rgba(255, 255, 255, 0.06);
+
+  --lz-primary: #eeeeee;
+  --lz-accent-bg: rgba(96, 177, 255, 0.12);
+
+  /* 暗色下这几档换的是**色相**：error 从 volcano 换成 red，business 从 geekblue 换成 blue。
+     照抄明色会让暗色下的绿和红都发闷。 */
+  --lz-state-running-bg: rgba(103, 158, 254, 0.16);
+  --lz-state-success-bg: rgba(34, 197, 94, 0.16);
+  --lz-state-failed-bg: rgba(242, 90, 90, 0.16);
+  --lz-state-waiting-bg: rgba(245, 158, 11, 0.16);
+  --lz-state-blocked-bg: rgba(242, 90, 90, 0.22);
+  --lz-state-idle: #6f6f6f;
+  --lz-state-idle-bg: rgba(255, 255, 255, 0.06);
+
+  --lz-shadow-raised: 0 3px 1px -1px rgba(0, 0, 0, 0.4);
+  --lz-shadow-popover: 0 8px 16px -4px rgba(0, 0, 0, 0.5);
+  --lz-shadow-modal: 0 20px 20px -8px rgba(0, 0, 0, 0.6);
+}

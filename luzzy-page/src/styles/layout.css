@@ -1,0 +1,196 @@
+/* ============================================================ Luzzy 控制台 · 页面骨架
+ *
+ * 只管「页面怎么摆」，不管「东西长什么样」。控件、卡片、徽标等一律在 components.css。
+ * 所有取值来自 tokens.css，这里不出现任何新的颜色、字号、间距或圆角字面量。
+ */
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--lz-bg-layout);
+  color: var(--lz-text);
+}
+
+body {
+  font-family: 'Luzzy Sans', 'Luzzy PuHuiTi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: var(--lz-font-base);
+  line-height: var(--lz-line-height);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------------------------------------------------------------- 页面骨架
+ *
+ * 三行：顶栏（页签 + 次要入口）、内容（唯一滚动区）、通知条（贴底、按需出现）。
+ * 内容区是唯一的滚动容器——把滚动交给 body 会让顶栏跟着滚走。 */
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 100%;
+}
+
+.scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: var(--lz-page-pad) var(--lz-page-pad) var(--lz-space-xl);
+}
+
+/* 内容列：居中、有上限宽度。
+ *
+ * 上限不是照抄聊天区的 748px——那是聊天内容的行宽，放在整栏视图里等于右侧大片留白。
+ * 1100px 是「一栏能放两张卡片、一张卡片不至于宽到读不了」的量。
+ * 设计系统要求主内容居中、留白随断点增长，所以窄屏时内边距收窄而不是列收窄。 */
+.column {
+  width: 100%;
+  max-width: var(--lz-column-max);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--lz-space-base);
+}
+
+/* ---------------------------------------------------------------- 顶栏 */
+.topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--lz-space-sm);
+  padding: var(--lz-space-sm) var(--lz-page-pad);
+  border-bottom: 1px solid var(--lz-border-secondary);
+  background: var(--lz-bg-layout);
+  position: sticky;
+  top: 0;
+  z-index: 20;
+}
+
+.topbar .spacer { flex: 1 1 auto; }
+
+/* 页签栏：胶囊底 + 分段控件，与 DSH 自己的分段控件同形。 */
+.segment {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--lz-space-xxs);
+  padding: var(--lz-space-xxs);
+  border-radius: var(--lz-radius);
+  background: var(--lz-fill-tertiary);
+}
+
+.segment button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--lz-text-secondary);
+  font: inherit;
+  font-size: var(--lz-font-base);
+  line-height: 1;
+  padding: var(--lz-space-xs) var(--lz-space-sm);
+  border-radius: var(--lz-radius-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--lz-duration-fast) var(--lz-ease), color var(--lz-duration-fast) var(--lz-ease);
+}
+
+.segment button:hover { background: var(--lz-fill-secondary); color: var(--lz-text); }
+.segment button[aria-selected='true'],
+.segment button[aria-pressed='true'] {
+  background: var(--lz-bg-container);
+  color: var(--lz-text);
+  font-weight: var(--lz-weight-strong);
+  box-shadow: var(--lz-shadow-raised);
+}
+
+/* 焦点环：每一个可交互元素都要有，且只在键盘导航时出现。 */
+.segment button:focus-visible,
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--lz-focus-ring);
+  outline-offset: 1px;
+}
+
+/* 页签太多时允许横向滚动，而不是把顶栏撑破 */
+.tabs { min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+
+/* ---------------------------------------------------------------- 分栏栅格
+ *
+ * 两列在宽屏并排、窄屏折成一列。用 auto-fit + minmax 而不是媒体查询：
+ * 折点由「卡片最小可读宽度」决定，而不是由设备名决定。 */
+.grid {
+  display: grid;
+  gap: var(--lz-space-base);
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.grid[data-cols='2'] { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.grid[data-cols='3'] { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+
+/* 并排时每列自己纵向堆叠，卡片之间保持同样间隙 */
+.grid > .stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lz-space-base);
+  min-width: 0;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--lz-space-base);
+  min-width: 0;
+}
+
+.inlineRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--lz-space-xs);
+}
+
+/* ---------------------------------------------------------------- 通知条
+ *
+ * 一个转瞬即逝的提示，贴在底部。不是对话框：对话框要用户答，这里只是告诉一声。
+ * 空着时 `hidden`，不占横向空间。 */
+.noticeBar {
+  flex: 0 0 auto;
+  padding: 0 var(--lz-page-pad);
+}
+
+.noticeBar span {
+  display: block;
+  margin: 0 auto var(--lz-space-sm);
+  max-width: var(--lz-column-max);
+  padding: var(--lz-space-sm) var(--lz-space-base);
+  border: 1px solid var(--lz-border-secondary);
+  border-left: 3px solid var(--lz-state-waiting);
+  border-radius: var(--lz-radius);
+  background: var(--lz-bg-elevated);
+  box-shadow: var(--lz-shadow-popover);
+  font-size: var(--lz-font-base);
+  color: var(--lz-text);
+  overflow-wrap: anywhere;
+}
+
+.noticeBar span[hidden] { display: none; }
+
+/* ---------------------------------------------------------------- 响应式
+ *
+ * 窄屏收的是**内边距**，不是列宽——设计系统要求主内容居中、留白随断点增长。 */
+@media (max-width: 720px) {
+  :root { --lz-page-pad: var(--lz-space-base); }
+  .topbar { gap: var(--lz-space-xs); }
+}
+
+@media (max-width: 420px) {
+  :root { --lz-page-pad: var(--lz-space-sm); }
+  .segment button { padding: var(--lz-space-xs); }
+}
+
+/* ---------------------------------------------------------------- 打印与无脚本兜底 */
+@media print {
+  .topbar, .noticeBar { display: none; }
+  .scroll { overflow: visible; }
+}

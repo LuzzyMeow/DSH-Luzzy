@@ -1,0 +1,35 @@
+{
+  "_comment": "帧内模块的加载顺序。显式声明而不是 glob——顺序决定依赖能否解析，而 glob 的顺序由文件系统给，不可预测。",
+  "_why_this_shape": "帧文档必须是自包含的单文档（srcDoc 不能有外部请求），所以这些文件在构建时被拼接成帧内的一个 <script>。它们用 IIFE 挂 window.LZ 命名空间，不用 import/export——帧脚本由 new Function 编译成经典脚本，ESM 语法在那里是语法错误。",
+
+  "styles": [
+    "styles/tokens.css",
+    "styles/layout.css",
+    "styles/components.css"
+  ],
+
+  "modules": [
+    "components/Format.js",
+    "components/Card.js",
+    "components/StatusBadge.js",
+    "components/Progress.js",
+    "components/EmptyState.js",
+    "components/Timeline.js",
+    "components/TreeView.js",
+    "components/Markdown.js",
+    "components/Chart.js",
+    "services/goal-service.js",
+    "services/runtime-service.js",
+    "services/agent-service.js",
+    "app/dialog.js",
+    "app/router.js",
+    "app/app.js",
+    "pages/overview.js",
+    "pages/goal.js",
+    "pages/runtime.js",
+    "pages/agent.js",
+    "pages/system.js",
+    "pages/readme.js",
+    "pages/preset.js"
+  ]
+}
