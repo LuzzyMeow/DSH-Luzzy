@@ -7,9 +7,9 @@
 一个与「对话」「轨迹」并列的第三个视图 · 一套可迁移的 Agent 预设 · 一份把踩坑写死的调研
 
 [![状态](https://img.shields.io/badge/状态-迭代期-orange)](#-迭代期声明)
-[![测试](https://img.shields.io/badge/测试-25_套件_·_1211_断言_·_0_失败-brightgreen)](#-验证)
+[![测试](https://img.shields.io/badge/测试-25_套件_·_1211_断言_·_0_失败-brightgreen)](#验证)
 [![许可](https://img.shields.io/badge/许可-MIT-blue)](LICENSE)
-[![DSH](https://img.shields.io/badge/DSH-0.1.5--rc.1_/_rc.2-informational)](#-环境要求)
+[![DSH](https://img.shields.io/badge/DSH-0.1.5--rc.1_/_rc.2-informational)](#环境要求)
 
 <sub>仓库名 <code>DSH-Luzzy</code> · 维护 <a href="https://github.com/LuzzyMeow">@LuzzyMeow</a></sub>
 
