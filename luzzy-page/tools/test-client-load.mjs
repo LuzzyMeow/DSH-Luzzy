@@ -582,6 +582,33 @@ if (entry) {
       !cssRules.includes('.objectiveFull') && !cssRules.includes('.objectiveRest'))
   }
 
+  // ------------------------------------------------- 状态链与激活技能清单（视图）
+  //
+  // 用户要的是「每次对话都要执行状态链」+「增加激活技能清单的视图」。这两样都要**看得见**：
+  // 一个从不出现的门，和没有门在用户眼里是一样的。
+  {
+    const css = readFileSync(join(PLUGIN_ROOT, 'src', 'styles', 'components.css'), 'utf8')
+    check('the goal page shows the chain judgement', source.includes('function chainLine('))
+    check('and the activation list', source.includes('function skillBlock('))
+    check('both are actually rendered', /chainLine\(view\),\s*\n\s*skillBlock\(view\),/.test(source))
+    // 「还没判断」必须是页面能表达的一个状态 —— 把它画成「未命中」是替 Agent 说一句它没说过的话。
+    check('an unjudged chain is shown as pending, not as a branch',
+      source.includes("data-chain=") && source.includes("chain.judged ? 'judged' : 'pending'"))
+
+    const goalPage = readFileSync(join(TOOLS_ROOT, 'src', 'pages', 'goal.js'), 'utf8')
+    // 四项都要渲染出来 —— 缺哪一项这条记录都答不出「为什么这一轮要用它」。
+    for (const field of ['row.name', 'row.description', 'row.purpose', 'row.source']) {
+      check(`the activation entry renders ${field}`, goalPage.includes(field), field)
+    }
+    check('a local path is not turned into a link', goalPage.includes('row.isLink'))
+    check('and the link opens outside the frame', /target="_blank" rel="noreferrer noopener"/.test(goalPage))
+    // 链接样式必须自己写：浏览器默认的蓝紫在暗色主题下看不清，而看不清＝来源无法核对。
+    check('the frame styles anchors it renders', /\.link\s*\{[^}]*color:\s*var\(--lz-accent\)/.test(css))
+    // 那个 class 必须真的存在（凭空写的类名不报错，只是不生效 —— §5.5 同型的坑）。
+    check('and the class used by the page is the one that exists',
+      goalPage.includes('class="link"') && css.includes('.link'))
+  }
+
   // A proposal may only be adopted from the page, so the page must actually offer it.
   check('the page can adopt a proposal', source.includes('adoptProposal'))
   // The artifact write is opt-in, so the page must not enable it by itself.

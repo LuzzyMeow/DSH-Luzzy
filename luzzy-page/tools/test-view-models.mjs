@@ -400,6 +400,53 @@ check('an empty plan yields an empty tree', taskTree([]).length === 0)
   check('an empty session keeps its own state', empty.ok === true && empty.goalState === 'empty')
 }
 
+// ---------------------------------------------------------------- 状态链与激活技能
+
+{
+  // 这两块是新增的投影面。断言的落点不是「字段在不在」，而是**页面会不会替 Agent 说话**：
+  // 一个还没判断的链必须读成「还没判断」，而不是「未命中」——后者是替 Agent 说了一句它没
+  // 说过的话，而这条状态链的全部价值就是「Agent 到底答没答」。
+  const base = {
+    sessionId: 'session-chain', goal: null, goalState: 'empty', artifact: {}, artifactPath: '',
+    integrity: null, drift: null,
+    delivery: {
+      chain: { goalMatch: 'matched', skillCheck: 'none', at: 1_700_000_000_000 },
+      skills: [
+        { id: 'S-001', name: 'luzzy-roster-design', description: '设计基线五条', purpose: '本次判断视觉层级', source: 'https://github.com/LuzzyMeow/LuzzyPrompt/tree/main/skills/luzzy-roster-design', at: 1_700_000_000_000 },
+        { id: 'S-002', name: 'local-skill', description: '本地', purpose: '本地用', source: 'C:/skills/local/SKILL.md', at: 1_700_000_000_000 },
+      ],
+    },
+  }
+  const view = LZ.GoalService.toView(base)
+  check('the chain is projected with both branches', view.delivery.chain.goalMatch === 'matched' && view.delivery.chain.skillCheck === 'none', JSON.stringify(view.delivery.chain))
+  check('and it is marked as judged', view.delivery.chain.judged === true)
+  check('with readable labels for both', view.delivery.chain.goalLabel.includes('命中') && view.delivery.chain.skillLabel.includes('未命中'), JSON.stringify([view.delivery.chain.goalLabel, view.delivery.chain.skillLabel]))
+  check('the skills are projected with all four fields',
+    view.delivery.skills.length === 2 &&
+    view.delivery.skills[0].name === 'luzzy-roster-design' &&
+    view.delivery.skills[0].description === '设计基线五条' &&
+    view.delivery.skills[0].purpose === '本次判断视觉层级' &&
+    view.delivery.skills[0].source.startsWith('https://'),
+    JSON.stringify(view.delivery.skills[0]))
+  check('an http source is a link', view.delivery.skills[0].isLink === true)
+  check('a local path is NOT a link (clicking it would look broken)', view.delivery.skills[1].isLink === false, String(view.delivery.skills[1].isLink))
+
+  // 没判断过的一轮：两个都必须是 null，标签是「还没判断」。
+  const unjudged = LZ.GoalService.toView({ ...base, delivery: { chain: { goalMatch: null, skillCheck: null, at: 0 }, skills: [] } })
+  check('an unjudged chain stays null (not coerced to "none")',
+    unjudged.delivery.chain.goalMatch === null && unjudged.delivery.chain.skillCheck === null,
+    JSON.stringify(unjudged.delivery.chain))
+  check('and it says so instead of claiming a branch',
+    unjudged.delivery.chain.goalLabel === '还没判断' && unjudged.delivery.chain.skillLabel === '还没判断',
+    JSON.stringify([unjudged.delivery.chain.goalLabel, unjudged.delivery.chain.skillLabel]))
+  check('and it is not marked judged', unjudged.delivery.chain.judged === false)
+  check('no judgement means no timestamp to show', unjudged.delivery.chain.at === '')
+
+  // 老文档（这段之前写的）根本没有 chain / skills 两个字段，读出来必须是空而不是崩。
+  const legacy = LZ.GoalService.toView({ ...base, delivery: { acceptance: [], tasks: [], evidence: [], decisions: [], blockers: [], proposals: [], changes: [], focus: '', next: [], scope: {}, constraints: [], revision: 1 } })
+  check('an older document without the fields still reads', legacy.delivery.chain.goalMatch === null && legacy.delivery.skills.length === 0)
+}
+
 // ---------------------------------------------------------------- runtime view model
 
 {

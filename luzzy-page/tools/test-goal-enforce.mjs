@@ -22,7 +22,7 @@
  * Run: node tools/test-goal-enforce.mjs
  */
 
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -341,14 +341,21 @@ try {
     eq('three messages now (claimed + injected + appended)', decision.messages.length, 3)
     // The decisive assertion: the notice is index 1 — right after the claimed message — and the
     // loop's own message moved to the end.
-    eq('the notice sits directly after the claimed message',
-      decision.messages[1]?.content?.[0]?.text?.slice(0, 12), '<goal_state>')
+    //
+    // 标记变了：状态链现在是同一条 notice 的**开头**。合成一条是有意的 —— 一段步里插三条
+    // notice，模型读到的就是三段互不相干的独白；合成一条读到的才是「这一轮的处境」。所以这里
+    // 断的不是「开头是 goal_state」，而是「开头是链、链里带着目标块、而且只有一条」。
+    const injectedText = String(decision.messages[1]?.content?.[0]?.text ?? '')
+    check('the notice sits directly after the claimed message', injectedText.startsWith('<state_chain>'))
+    check('the goal block rides in the SAME notice', injectedText.includes('<goal_state>'))
+    // 我们自己的注入靠 `source.kind === 'plugin'` 认（它带 id，所以不能用「没有 id」当特征 ——
+    // 那是这条断言的第一版，报了个假失败）。
+    eq('and it is ONE notice, not two', decision.messages.filter((m) => m.source?.kind === 'plugin').length, 1)
     eq('the loop\'s own message keeps its content', decision.messages[2]?.id, 'appended-1')
     eq('and the claimed message is untouched at the front', decision.messages[0]?.id, 'claimed-1')
     // Negative control inside the same test: a tail append would put the notice at index 2.
-    check('it is NOT at the tail', decision.messages[2]?.content?.[0]?.text !== undefined
-      ? !String(decision.messages[2].content[0].text).startsWith('<goal_state>')
-      : true, JSON.stringify(decision.messages.map((m) => m.id ?? 'notice')))
+    check('it is NOT at the tail', !String(decision.messages[2]?.content?.[0]?.text ?? '').startsWith('<state_chain>'),
+      JSON.stringify(decision.messages.map((m) => m.id ?? 'notice')))
     enforce.resetCounters()
   }
   {
@@ -1266,6 +1273,190 @@ try {
     eq('with the session gate off, a goal-less write proceeds',
       (await fire(ctx, 'tools/pre-execute', { name: 'write', arguments: {}, agent: fakeAgent('s-off') }, { kind: 'allow' })).kind, 'allow')
     eq('and nothing was counted', enforcement.stats().gateBlocked, 0)
+  }
+
+  // ---------------------------------------------------------------- 状态链（两道新门）
+  //
+  // 用户要的是「每次对话都要执行状态链」，而且「必须有这个判断，不然直接锁工具」。这两条断言
+  // 必须证明的是**门真的会拦、拦完能过、下一轮还会再拦一次** —— 缺任何一半都不是那条需求：
+  //   只拦不放过 = 死锁；只过不拦 = 又回到了「提示词里写一句」。
+  console.log('goal-enforce: the state chain gate holds the turn until both branches are answered')
+  /**
+   * 答一次链，并**同时**落盘 —— 因为真实的 judgeChain 会做这两件事。
+   *
+   * 第一版只清了内存标记，于是门里读到的 `chain.goalMatch` 还是 null，我把它读成了产品 bug；
+   * 其实是装置少做了一半。**替身比真货少做一半和比真货宽松一样有害**：前者让正确的代码看起来
+   * 是坏的，后者让坏的代码看起来是对的。所以这里用「读-改-写 + CAS」照抄真实路径。
+   */
+  function chainHarness(paths, sessionId) {
+    let revision = null
+    const persist = (mutate) => {
+      const read = store.readDeliveryOverlay(paths, sessionId)
+      const base = read.ok ? read.delivery : domain.emptyDelivery(sessionId)
+      const written = store.writeDeliveryOverlay(paths, sessionId, mutate(base), revision)
+      if (written.ok) revision = written.revision
+      return written
+    }
+    return { persist }
+  }
+  {
+    const paths = freshPaths()
+    const sessionId = 'sess-chain-gate'
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const agent = fakeAgent(sessionId)
+    const chain = chainHarness(paths, sessionId)
+    const attempt = () => fire(ctx, 'tools/pre-execute', { name: 'write', arguments: {}, agent }, { kind: 'allow' })
+
+    // 一轮的开始 = 一条新的用户消息。链在这一刻被置位。
+    const openTurn = (messageId, step = 1, extra = []) => {
+      const claimed = { role: 'user', id: messageId, content: '继续' }
+      return fire(ctx, 'agent/pre-step',
+        { agent, messages: [claimed], turn: 1, step, signal: {} },
+        { kind: 'enter', messages: [claimed, ...extra] })
+    }
+    // 工具自己渲染的形状：状态词 + JSON（见 goal-tools.mjs 的 render）。
+    const judge = (payload, status = 'ok') => fire(ctx, 'tools/post-execute',
+      { name: 'goal_delivery', arguments: { action: 'judgeChain', ...payload }, agent },
+      { isError: false, content: [{ type: 'text', text: `${status}: x\n${JSON.stringify({ status, action: 'judgeChain' })}` }] },
+      { kind: 'accept' })
+    const answered = (payload) => {
+      const written = chain.persist((d) => domain.applyDeliveryOp(d, 'judgeChain', payload, { at: Date.now() }).delivery)
+      eq('the judgement fixture landed', written.ok, true)
+      return judge(payload)
+    }
+
+    const notice = await openTurn('msg-1')
+    check('the state chain rides in the turn notice', String(notice.messages[1]?.content?.[0]?.text ?? '').includes('<state_chain>'))
+    eq('and a new user message armed the gate', enforce.readCounters(sessionId).chainPending, true)
+
+    const held = await attempt()
+    eq('a work tool is refused before the chain is answered', held.kind, 'deny')
+    const heldReason = typeof held.reason === 'string' ? held.reason : ''
+    check('and the refusal names the gate', /STATE_CHAIN_REQUIRED/.test(heldReason), heldReason)
+    check('and names the call that answers it', /judgeChain/.test(heldReason), heldReason)
+    check('and spells out both branches', /goalMatch/.test(heldReason) && /skillCheck/.test(heldReason), heldReason)
+    eq('and is counted', enforcement.stats().chainBlocked, 1)
+
+    // 答了但**没答成**的调用不算答过：状态从工具自己的结果里读，保守方向是保持门关着。
+    await judge({ goalMatch: 'none', skillCheck: 'none' }, 'error')
+    eq('a FAILED judgement does not open the gate', enforce.readCounters(sessionId).chainPending, true)
+    eq('so the work tool is still refused', (await attempt()).kind, 'deny')
+
+    await answered({ goalMatch: 'none', skillCheck: 'none' })
+    eq('a successful judgement clears it', enforce.readCounters(sessionId).chainPending, false)
+    eq('and the work tool passes', (await attempt()).kind, 'allow')
+
+    // 同一个用户消息的后续 step 不是新的一轮 —— 否则一步没答完就又置位，门会自己续期。
+    await openTurn('msg-1', 2)
+    eq('re-entering the SAME user message does not re-arm', enforce.readCounters(sessionId).chainPending, false)
+
+    // 而且**我们自己的注入不能算新一轮**：它也是 user 角色（source.kind === plugin）。
+    // 这条是那个过滤器的反证 —— 去掉过滤，链会在每个 step 自己重新置位。
+    const pluginNotice = { role: 'user', id: 'notice-1', source: { kind: 'plugin' }, content: [{ type: 'text', text: 'x' }] }
+    await fire(ctx, 'agent/pre-step', { agent, messages: [], turn: 1, step: 3, signal: {} },
+      { kind: 'enter', messages: [{ role: 'user', id: 'msg-1', content: '继续' }, pluginNotice] })
+    eq('and our own injected notice is not mistaken for a new turn', enforce.readCounters(sessionId).chainPending, false)
+
+    await openTurn('msg-2', 4)
+    eq('a NEW user message re-arms it', enforce.readCounters(sessionId).chainPending, true)
+    eq('and the gate holds the next turn too', (await attempt()).kind, 'deny')
+  }
+  {
+    // 两条分支：命中 → 目标必须完整；未命中 → 本轮不要求目标。这是同一个判断的两个答案，
+    // 不是「有门」和「没门」。
+    const paths = freshPaths()
+    const sessionId = 'sess-branches'
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const agent = fakeAgent(sessionId)
+    const chain = chainHarness(paths, sessionId)
+    const attempt = () => fire(ctx, 'tools/pre-execute', { name: 'write', arguments: {}, agent }, { kind: 'allow' })
+    const openTurn = (messageId) => {
+      const claimed = { role: 'user', id: messageId, content: '继续' }
+      return fire(ctx, 'agent/pre-step', { agent, messages: [claimed], turn: 1, step: 1, signal: {} },
+        { kind: 'enter', messages: [claimed] })
+    }
+    const judge = (payload) => {
+      chain.persist((d) => domain.applyDeliveryOp(d, 'judgeChain', payload, { at: Date.now() }).delivery)
+      return fire(ctx, 'tools/post-execute',
+        { name: 'goal_delivery', arguments: { action: 'judgeChain', ...payload }, agent },
+        { isError: false, content: [{ type: 'text', text: 'ok: x\n{"status":"ok"}' }] },
+        { kind: 'accept' })
+    }
+
+    await openTurn('b-1')
+    await judge({ goalMatch: 'matched', skillCheck: 'none' })
+    const matched = await attempt()
+    eq('branch 1 (命中) still requires a goal', matched.kind, 'deny')
+    check('and says it is the goal gate, not the chain gate',
+      /GOAL_GATE_REQUIRED/.test(typeof matched.reason === 'string' ? matched.reason : ''), typeof matched.reason === 'string' ? matched.reason : '')
+
+    await openTurn('b-2')
+    await judge({ goalMatch: 'none', skillCheck: 'none' })
+    eq('branch 2 (未命中) lets the same call through with no goal', (await attempt()).kind, 'allow')
+  }
+  {
+    // 技能门：「命中」之后登记也要真的发生，否则那句话没法核对。
+    const paths = freshPaths()
+    const sessionId = 'sess-skill-gate'
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const agent = fakeAgent(sessionId)
+    const chain = chainHarness(paths, sessionId)
+    const attempt = () => fire(ctx, 'tools/pre-execute', { name: 'write', arguments: {}, agent }, { kind: 'allow' })
+    const claimed = { role: 'user', id: 's-1', content: '按技能清单做' }
+    await fire(ctx, 'agent/pre-step', { agent, messages: [claimed], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [claimed] })
+    chain.persist((d) => domain.applyDeliveryOp(d, 'judgeChain', { goalMatch: 'none', skillCheck: 'hit' }, { at: Date.now() }).delivery)
+    await fire(ctx, 'tools/post-execute',
+      { name: 'goal_delivery', arguments: { action: 'judgeChain' }, agent },
+      { isError: false, content: [{ type: 'text', text: 'ok: x\n{"status":"ok"}' }] },
+      { kind: 'accept' })
+
+    const skillHeld = await attempt()
+    eq('命中技能清单但不登记，仍被拦住', skillHeld.kind, 'deny')
+    const skillReason = typeof skillHeld.reason === 'string' ? skillHeld.reason : ''
+    check('and the refusal is the SKILL one, not the chain one', /SKILL_LIST_EMPTY/.test(skillReason), skillReason)
+    check('and it names the four required fields',
+      ['name', 'description', 'purpose', 'source'].every((field) => skillReason.includes(field)), skillReason)
+    eq('and it is counted separately', enforcement.stats().skillBlocked, 1)
+
+    // 出口工具必须能过 —— 否则「先读完整正文再登记」这句要求在门后没有执行路径。
+    const exit = await fire(ctx, 'tools/pre-execute',
+      { name: 'goal_delivery', arguments: { action: 'activateSkill' }, agent }, { kind: 'allow' })
+    eq('activateSkill passes through the gate', exit.kind, 'allow')
+
+    // 登记之后放行（走真实的状态写入，而不是把门短路）。
+    const written = chain.persist((d) => domain.applyDeliveryOp(d, 'activateSkill',
+      { name: 'luzzy-roster-design', description: '设计基线', purpose: '本次要判断视觉层级', source: 'https://example.invalid/skills/x' },
+      { at: Date.now() }).delivery)
+    eq('the activation fixture landed', written.ok, true)
+    eq('and then the work tool passes', (await attempt()).kind, 'allow')
+  }
+  {
+    // 读不出交付状态时，链门仍然持有工具：「我读不出来」不等于「模型答过了」。
+    const paths = freshPaths()
+    const sessionId = 'sess-chain-unreadable'
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(ctx, { paths, options: {} })
+    const agent = fakeAgent(sessionId)
+    const claimed = { role: 'user', id: 'u-1', content: '继续' }
+    await fire(ctx, 'agent/pre-step', { agent, messages: [claimed], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [claimed] })
+    // 目录要先存在：这条断言测的是「文件坏了」，不是「目录没有」（后者是另一条路径）。
+    mkdirSync(paths.dir, { recursive: true })
+    writeFileSync(join(paths.dir, `${sessionId}.json`), '{ 这不是 JSON')
+
+    const held = await fire(ctx, 'tools/pre-execute', { name: 'write', arguments: {}, agent }, { kind: 'allow' })
+    eq('an unreadable overlay does NOT open the chain gate', held.kind, 'deny')
+    check('and the refusal is still the chain one',
+      /STATE_CHAIN_REQUIRED/.test(typeof held.reason === 'string' ? held.reason : ''),
+      typeof held.reason === 'string' ? held.reason : '')
   }
 
   console.log('goal-enforce: the reminder is per-phase, not once-per-session')

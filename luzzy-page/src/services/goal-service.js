@@ -45,6 +45,15 @@
     completed: '已完成',
   }
 
+  /**
+   * 状态链两条分支的显示名。
+   *
+   * 「还没判断」不是一个错误状态 —— 新一轮刚开头时它就是 null。把它显示成「未命中」是在替
+   * Agent 说一句它没说过的话。
+   */
+  const CHAIN_GOAL_LABEL = { matched: '命中（在推进一个长期目标）', none: '未命中（本轮不是长期任务）' }
+  const CHAIN_SKILL_LABEL = { hit: '命中（按技能清单执行）', none: '未命中（本轮不按技能清单）' }
+
   /** 把毫秒时间戳格式化成可读的时间。
    *
    * 显示口径是**本地时间**：日志里是毫秒，用户看的是墙上时钟。
@@ -162,10 +171,37 @@
       }
     })
 
+    const chain = delivery.chain || { goalMatch: null, skillCheck: null, at: 0 }
+    const skills = (delivery.skills || []).map(function (row) {
+      return {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        purpose: row.purpose,
+        source: row.source,
+        // 只有 http(s) 才当链接。本地路径做成链接，点下去是「找不到文件」——那看起来像
+        // 页面坏了，而实际是它本来就不是一个网址。
+        isLink: /^https?:\/\//.test(row.source),
+        at: row.at === 0 ? '' : stamp(row.at, now),
+      }
+    })
+
     return {
       objectiveMirror: delivery.objectiveMirror || '',
       focus: delivery.focus || '',
       next: (delivery.next || []).slice(),
+      // 状态链的两条分支：这里只投影**事实**（Agent 答过什么、什么时候答的），
+      // 页面负责把它说成中文。判断本身归 Agent，这一层不替它补默认值。
+      chain: {
+        goalMatch: chain.goalMatch === undefined ? null : chain.goalMatch,
+        goalLabel: CHAIN_GOAL_LABEL[chain.goalMatch] || '还没判断',
+        skillCheck: chain.skillCheck === undefined ? null : chain.skillCheck,
+        skillLabel: CHAIN_SKILL_LABEL[chain.skillCheck] || '还没判断',
+        judged: chain.goalMatch !== undefined && chain.goalMatch !== null &&
+          chain.skillCheck !== undefined && chain.skillCheck !== null,
+        at: chain.at === undefined || chain.at === 0 ? '' : stamp(chain.at, now),
+      },
+      skills: skills,
       scope: {
         included: (delivery.scope && delivery.scope.included) || [],
         excluded: (delivery.scope && delivery.scope.excluded) || [],

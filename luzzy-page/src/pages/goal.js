@@ -56,8 +56,12 @@
 
     const objective = LZ.Format.objectiveText(goal.objective)
 
+    // 卡片头**不再重复阶段**。
+    //
+    // 截图里「进行中」出现过三次：卡片头的 count、徽标行里的阶段徽标、以及 kv 的「当前阶段」。
+    // 同一个词说三遍只增加噪音，还让人去找它们之间的差别（用户早前的截图投诉过同一类：
+    // 并排两个一模一样的胶囊）。阶段留在徽标上——它带图标与颜色，是三者里唯一多给了信息的那个。
     const meta = LZ.Card.kv([
-      { label: '当前阶段', value: goal.phaseLabel },
       { label: '修订', value: 'r' + goal.revision },
       { label: '轮次', value: goal.roundsStarted + ' / ' + goal.maxGoalRounds },
       { label: '完成度', value: view.counts.acceptance.done + ' / ' + view.counts.acceptance.total + ' 条验收标准已验证' },
@@ -68,7 +72,6 @@
 
     return LZ.Card.card({
       title: '目标概览',
-      count: goal.phaseLabel,
       body: head + objective + meta + blocked +
         LZ.Card.btnBar([
           { label: '刷新', id: 'goalRefresh' },
@@ -344,6 +347,80 @@
     })
   }
 
+  /**
+   * 状态链：本轮的两条分支各答了什么。
+   *
+   * 为什么值得一行版面：用户要的是「每次对话都要执行状态链（动态追踪 Agent 进度）」，而
+   * 「有没有真的在走」是这条需求里唯一可核对的部分。看不见的判断等于没有判断 —— 一个从不
+   * 出现在页面上的门，和没有门在用户眼里是一样的。
+   *
+   * 「还没判断」照实说。新一轮刚开头时它就是 null，把它画成「未命中」是在替 Agent 说一句
+   * 它没说过的话。
+   */
+  function chainLine(view) {
+    const chain = view.delivery.chain
+    if (chain === null || chain === undefined) return ''
+    const tone = function (value) {
+      if (value === 'matched' || value === 'hit') return 'success'
+      if (value === 'none') return 'idle'
+      return 'waiting'
+    }
+    // 外层 `driftLine` 只借它的垂直留白，内层 `badgeRow` 只借它的横排（flex + wrap + gap）。
+    //
+    // 第一版把每段文字包在 `.driftText` 里 —— 那是个**容器**（`display:flex`），于是四段各自
+    // 占一行，整行散成五行。截图里一眼就看得见，而断言全绿：**布局问题只有看图才知道**
+    // （§5.30「布局要量不要看」的反面：视觉的事就得看）。
+    return '<div class="driftLine" data-chain="' + (chain.judged ? 'judged' : 'pending') + '">' +
+      '<div class="badgeRow">' +
+      badge(tone(chain.goalMatch), '目标分支') +
+      '<span>' + esc(chain.goalLabel) + '</span>' +
+      badge(tone(chain.skillCheck), '技能分支') +
+      '<span>' + esc(chain.skillLabel) + '</span>' +
+      (chain.at === '' ? '' : '<span class="segLabel">· ' + esc(chain.at) + '</span>') +
+      '</div>' +
+      '</div>'
+  }
+
+  /**
+   * 激活技能清单：Agent 读完某份 skill 的**完整正文**之后登记的那几条。
+   *
+   * 四项都是必填（名称 / 描述 / 本次作用 / 来源），因为缺任何一项，这条记录都答不出
+   * 「为什么这一轮要用它」。渲染时也照这四项来：把「本次任务的作用」和「技能描述」分开显示，
+   * 是因为它们回答的是两个问题 —— 一个是它是什么，一个是它在这里做什么。
+   */
+  function skillBlock(view) {
+    const skills = view.delivery.skills || []
+    const hit = view.delivery.chain !== null && view.delivery.chain !== undefined && view.delivery.chain.skillCheck === 'hit'
+    if (skills.length === 0 && !hit) return ''
+
+    const body = skills.length === 0
+      ? '<p class="rowSub">本轮答了「命中技能清单」，但还没有登记任何技能。' +
+        '登记之前，Agent 的工作类工具会被拒 —— 这一条是核对用的，所以它不能只是一句话。</p>'
+      : '<ul class="rows">' + skills.map(function (row) {
+        return '<li class="row">' +
+          '<span class="rowId">' + esc(row.id) + '</span>' +
+          '<div class="rowBody">' +
+            '<p class="rowText">' + esc(row.name) + '</p>' +
+            '<p class="rowSub">' + esc(row.description) + '</p>' +
+            '<p class="rowText">本次作用：' + esc(row.purpose) + '</p>' +
+            '<p class="rowSub">' + (row.isLink
+              ? '<a class="link" href="' + esc(row.source) + '" target="_blank" rel="noreferrer noopener">' + esc(row.source) + '</a>'
+              : '<code>' + esc(row.source) + '</code>') +
+              (row.at === '' ? '' : ' · ' + esc(row.at)) + '</p>' +
+          '</div>' +
+          '</li>'
+      }).join('') + '</ul>'
+
+    return LZ.Card.card({
+      id: 'goalSkills',
+      title: '激活技能清单',
+      count: skills.length === 0 ? '一条都没有' : skills.length + ' 项',
+      sub: '由 Agent 实际读完某份 skill 的完整正文后填写。每轮只注入技能名称与来源，正文不注入 ——' +
+        '所以来源要能让人自己去读全文。',
+      body: body,
+    })
+  }
+
   function integrityBlock(view) {
     const integrity = view.integrity
     if (integrity === null || integrity === undefined) return ''
@@ -501,6 +578,8 @@
       overviewBlock(view),
       readinessBlock(view),
       driftLine(view),
+      chainLine(view),
+      skillBlock(view),
       proposalsBlock(view),
       focusBlock(view),
       '<div class="grid" data-cols="2">' +

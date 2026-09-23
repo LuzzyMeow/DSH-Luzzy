@@ -38,7 +38,10 @@ try {
   )
   check('found the insert block to replace', insertBlock.length > 0 && insertBlock.includes('toSpliced'))
 
-  const tailVersion = `      const notice = pluginNotice(text, changed ? '目标已更新' : '目标状态')
+  // 这份替身必须跟得上真实代码的形状：notice 现在由 parts 合成（不再是单个 text 变量），
+  // 替身沿用旧的 `text` 会变成一次 ReferenceError —— 那也会让套件变红，但红的原因不是位置，
+  // 于是这条反证就什么都没证明（本轮真的这么失败过一次）。
+  const tailVersion = `      const notice = pluginNotice(parts.join('\\n\\n'), summary)
       return {
         ...decision,
         messages: [...decision.messages, notice],
