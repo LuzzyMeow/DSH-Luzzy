@@ -182,7 +182,15 @@ try {
     rmSync(join(storeDir, 'default.md'), { force: true })
     const nothing = provider({})
     check('with nothing readable the bundled fallback is used', nothing.length > 0)
-    check('the bundled fallback explains itself', nothing.includes('LuzzyMode'), nothing.slice(0, 60))
+    // 兜底必须**自报家门**：三个来源全读不到时，页面上什么都没写、模型却照常说话，
+    // 用户会觉得一切正常 —— 「配置丢了」被伪装成「没有配置」。针脚从旧的 `LuzzyMode`
+    // 换成「包内兜底」这四个字，因为它断的是**这个契约**，不是那句旧文案。
+    check('the bundled fallback explains itself', nothing.includes('包内兜底'), nothing.slice(0, 80))
+    // 反过来也要断：**正常路径不许带这段说明**。说明写进文件里就会每一轮都在解释一件
+    // 没发生的事 —— 所以它必须由代码在 `source === 'builtin'` 时才加。
+    writeFileSync(join(storeDir, 'default.md'), 'DEFAULT-PROMPT', 'utf8')
+    const normal = provider({})
+    eq('and the notice is absent when a real prompt was read', normal, 'DEFAULT-PROMPT')
 
     console.log('luzzy-preset: unloading removes both registrations')
     for (const dispose of ctx.disposers) dispose()

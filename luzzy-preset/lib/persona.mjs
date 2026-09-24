@@ -64,6 +64,26 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const BUILTIN_FALLBACK = join(HERE, 'default-prompt.md')
 
 /**
+ * A note prepended **only when the bundled file is what got read.**
+ *
+ * WHY IT IS ADDED HERE AND NOT WRITTEN INTO THE FILE
+ *
+ * 兜底文件与用户提示词是**同一份内容**（默认人格），所以说明不能写进文件里 —— 那样正常路径也会
+ * 带上它，每一轮都在跟模型解释一件没发生的事。
+ *
+ * 但它必须存在：三个来源全读不到时，页面上什么都没写、模型却照常说话，**用户会觉得一切正常**。
+ * 「配置丢了」被伪装成「没有配置」是这个项目最重的一类错误，所以兜底必须自报家门。
+ *
+ * 判据来自读取器自己（`source === 'builtin'`），不是猜的。
+ */
+const FALLBACK_NOTICE = [
+  '> **注意：这是包内兜底人格，不是你的提示词。**',
+  '> 预设存储与 `default.md` 都没读到，所以退到了随包分发的那一份。',
+  '> 你的提示词在 LuzzyPage 的「预设」子页里设置，存放在 `$DSH_HOME/luzzy-preset/`。',
+  '',
+].join('\n')
+
+/**
  * Register the persona section, its variable, and the suffix.
  *
  * Registration order matters in one direction only: the variable is registered BEFORE the
@@ -78,7 +98,11 @@ export function apply(ctx) {
   const reader = createPromptReader(paths, { builtinFallbackPath: BUILTIN_FALLBACK })
 
   ctx.effect(
-    () => ctx.systemPrompt.variable(PERSONA_VARIABLE, () => reader.read().text),
+    () =>
+      ctx.systemPrompt.variable(PERSONA_VARIABLE, () => {
+        const read = reader.read()
+        return read.source === 'builtin' ? FALLBACK_NOTICE + read.text : read.text
+      }),
     'luzzy-preset: persona variable',
   )
 
