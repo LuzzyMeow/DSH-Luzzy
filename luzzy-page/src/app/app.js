@@ -676,6 +676,12 @@
    */
   let refreshTimer = null
 
+  // 生命周期按钮的 in-flight 闩。`disabled` 挡不住快速双击或「点一下再在已聚焦的按钮上按回车」
+  // （§5.23 那次真事故：一个会话新建出了两个），而「建目标」重复调用的结果是
+  // GOAL_ALREADY_EXISTS —— 一个不可恢复的错误。完成同理。暂停/恢复是幂等的，不需要闩。
+  let goalCreateInFlight = false
+  let goalCompleteInFlight = false
+
   function shouldRefresh() {
     if (typeof document.hidden === 'boolean' && document.hidden) return false
     if (state.tab === 'readme') return false
@@ -800,6 +806,36 @@
           goalPost('reconcile', { goalId: goal.id, goalRevision: goal.revision, objective: goal.objective })
           return
         }
+        // 运行时目标的生命周期。这四个走宿主路由，由它去调 goal 服务自己的
+        // create / pause / resume / complete —— 阶段机、revision 检查、durable event 都留在
+        // @deepseek-ai/dsh-goal 里，页面只是按按钮。
+        //
+        // 以前这里一个都没有，于是「建目标」唯一的路是 DSH 内置的 create_goal 工具，
+        // 用户看到的结论就是「控制台的目标中心是个看板」。
+        case 'goalCreate': {
+          if (goalCreateInFlight) return
+          openGoalCreateDialog()
+          return
+        }
+        case 'goalPause': goalPost('goalPause'); return
+        case 'goalResume': goalPost('goalResume'); return
+        case 'goalComplete': {
+          // 完成是不可逆的转向，问一次。这不是不信任门 —— 门管的是「能不能」，这里问的是
+          // 「你确定现在吗」，两件事。
+          const goal = state.goal === null ? null : state.goal.goal
+          if (goal === null || goal === undefined) return
+          if (goalCompleteInFlight) return
+          goalCompleteInFlight = true
+          LZ.Dialog.confirm({
+            title: '标记这个目标已完成？',
+            body: '完成之后不能恢复：目标会转入 complete，续行停止，要用新的目标来继续这件事。验收标准已经全部验证通过。',
+            confirmLabel: '标记完成',
+          }).then(function (yes) {
+            goalCompleteInFlight = false
+            if (yes) goalPost('goalComplete')
+          })
+          return
+        }
         case 'goalRawToggle': {
           state.rawOpen = !state.rawOpen
           if (state.rawOpen && state.rawText === null) {
@@ -829,6 +865,43 @@
         state.rawText = result.body.artifact && result.body.artifact.text ? result.body.artifact.text : null
       }
       if (state.tab === 'goal') render()
+    })
+  }
+
+  /**
+   * Ask for an objective, then create the runtime goal.
+   *
+   * WHY A DIALOG AND NOT A ONE-CLICK BUTTON. `create_goal` needs an objective, and the service
+   * refuses an empty one — an objective-less goal cannot answer "what counts as done", which is
+   * the entire reason this system exists. So the button has to collect one, and a native
+   * `prompt` is forbidden here (§5.22: it is an OS-modal that steals keyboard focus and never
+   * gives it back). `LZ.Dialog.prompt` is the in-document one.
+   *
+   * Two guards, both learned from real incidents in this repo:
+   *   * an in-flight flag, because `disabled` does not stop a fast double-click or
+   *     click-then-Enter on an already-focused button (§5.23), and creating two goals is not a
+   *     recoverable mistake — the second call gets GOAL_ALREADY_EXISTS;
+   *   * the dialog resolves exactly once on every path, including Escape and scrim click, or
+   *     the flag never clears and the button is dead for the rest of the session.
+   */
+  function openGoalCreateDialog() {
+    goalCreateInFlight = true
+    LZ.Dialog.prompt(
+      '建立目标',
+      '',
+      '建立',
+      6,
+    ).then(function (objective) {
+      if (objective === null || objective === undefined || String(objective).trim() === '') {
+        // Cancelled, or confirmed with nothing typed. Either way nothing was created, so the
+        // flag must clear here or the button never works again.
+        goalCreateInFlight = false
+        return
+      }
+      // The flag stays set until the POST settles — that is the whole point of it.
+      goalPost('goalCreate', { objective: String(objective).trim() }).then(function () {
+        goalCreateInFlight = false
+      })
     })
   }
 

@@ -94,7 +94,21 @@ for (const marker of ['__FRAME_FONTS__', '__MODULES__', '__STYLES__']) {
 
 // 5 — the frame is self-contained: no external request can be made from inside it.
 check('no external url in the frame', !/url\((?!data:)/.test(srcDoc), 'the frame is an iframe srcDoc; it cannot fetch anything')
-check('fonts are inlined', (srcDoc.match(/@font-face/g) ?? []).length === 4)
+
+// The property is "every face the frame asks for is INLINED", not "there are exactly four".
+//
+// This used to read `… === 4`, which was a count of the four subset faces (CJK regular/bold +
+// Latin regular/bold). When the CJK half moved to the operating system's own fonts — the
+// reference's own stack does exactly that — the count became 3 and this check went red while
+// the frame was perfectly self-contained. A hardcoded count encodes the current inventory as
+// if it were the requirement.
+{
+  const faces = srcDoc.match(/@font-face\s*\{[^}]*\}/g) ?? []
+  const payloads = faces.filter((block) => /src:\s*url\(data:font\/woff2;base64,/.test(block))
+  check('there is at least one inlined face', faces.length > 0, 'the frame declares no font at all')
+  check('every declared face is inlined as a data URL', payloads.length === faces.length,
+    `${faces.length} face(s) declared, ${payloads.length} inlined — a face without a data URL would be an external request`)
+}
 
 console.log(notes.join('\n'))
 console.log()

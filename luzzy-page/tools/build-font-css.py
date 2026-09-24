@@ -57,19 +57,6 @@ import tempfile
 from pathlib import Path
 
 PLUGIN_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_FONT_DIR = Path(r"D:\.NekoTool\LuzzyRP\app\src\main\res\font")
-# Fallback source for the two CJK faces.
-#
-# The .ttf faces this build originally used were removed from LuzzyRP's res/font directory
-# (only the three Alibaba Sans faces remain there), which broke the build outright — a
-# pre-existing failure, not one this file introduced. The same PuHuiTi faces still exist in
-# that project as WOFF2 under its asset tree, and `pyftsubset` reads WOFF2 input directly
-# (verified), so the build can keep working instead of failing on a file that is no longer
-# where it used to be.
-#
-# TTF is still tried FIRST for every face: it is the higher-fidelity source, and if the
-# original files come back the build picks them up again with no change here.
-DEFAULT_FALLBACK_FONT_DIR = Path(r"D:\.NekoTool\LuzzyRP\app\src\main\assets\rphub\assets\fonts")
 DEFAULT_SRC_DIR = PLUGIN_ROOT / "src"
 DEFAULT_SRC = PLUGIN_ROOT / "src" / "client.js"
 DEFAULT_OUT = PLUGIN_ROOT / "lib" / "client.js"
@@ -78,25 +65,56 @@ PLACEHOLDER = "/*__FONT_FACE_CSS__*/"
 FRAME_TEMPLATE = PLUGIN_ROOT / "src" / "app" / "frame.html"
 MANIFEST = PLUGIN_ROOT / "src" / "app" / "manifest.json"
 
-FAMILY_CJK = "Luzzy PuHuiTi"
-FAMILY_LATIN = "Luzzy Sans"
-
-# (source filename, css family, weight, subset mode, fallback filename or None)
+# ------------------------------------------------------------------ why there is no CJK face
 #
-# The fallback is a different FILE NAME for the same face, not a different face: the PuHuiTi
-# numbering is the weight (55 = Regular 400, 85 = Bold 700), so the pairing is exact.
+# This build used to subset a Chinese face (Alibaba PuHuiTi) down to the non-ASCII characters
+# found under src/ plus README.md. That was structurally wrong, and the wrongness was invisible:
+#
+#   * The console renders text that ARRIVES AT RUNTIME — goal objectives, task titles, evidence
+#     lines, prompts, session titles, and the user's own words. None of it is in src/.
+#   * A glyph the subset lacks does not error. The browser falls back PER CHARACTER, mid
+#     sentence, to a system font with different weight and metrics. Measured on this machine:
+#     the live goal artifacts needed up to 81 characters the face did not have (9.5% of their
+#     distinct glyphs).
+#   * The only symptom is text that "looks slightly wrong", which is unfalsifiable by eye and
+#     is exactly the kind of complaint this project keeps having to chase down.
+#
+# Subsetting a superset is not possible: you cannot know what the user will type. The two real
+# options were a full CJK face (~5 MB woff2 → ~6.7 MB base64 inlined into every frame document)
+# or the operating system's own CJK font.
+#
+# The reference design (dsh-thoughtdag) takes the second option, and its authored stack says so
+# explicitly: `"Inter Variable", -apple-system, "PingFang SC", "Hiragino Sans GB", "Segoe UI"`.
+# It ships Inter for Latin and lets the OS supply CJK. So this is both the faithful choice and
+# the correct one, and it removes the fallback hole by construction rather than by enumeration.
+#
+# Latin is still inlined (Inter Variable, self-contained frame — no external request is allowed).
+FAMILY_LATIN = "Inter Variable"
+FAMILY_MONO = "JetBrains Mono Variable"
+
+# The CJK half of the stack, in the reference's own order. `PingFang SC` first (macOS),
+# `Microsoft YaHei` for Windows, then the generic families so a machine with neither still
+# resolves to something CJK-capable rather than to a Latin face with no Han glyphs at all.
+CJK_STACK = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif'
+
+# Vendored under assets/fonts/ and committed, so the build does not depend on a network fetch
+# or on another project's asset tree. Licenses sit beside them (Inter: SIL OFL 1.1).
+VENDOR_FONT_DIR = PLUGIN_ROOT / "assets" / "fonts"
+
+# (source filename, css family, weight, subset mode)
+#
+# Latin + mono only. `whole` = convert to WOFF2 without subsetting; the Latin range is small
+# enough that subsetting buys little and risks the same missing-glyph class of bug for text
+# the user types in English.
 FACES = [
-    ("puhuiti_55_regular.ttf", FAMILY_CJK, 400, "subset", "AlibabaPuHuiTi-3-55-Regular.woff2"),
-    ("puhuiti_85_bold.ttf", FAMILY_CJK, 700, "subset", "AlibabaPuHuiTi-3-85-Bold.woff2"),
-    ("alibaba_sans_regular.ttf", FAMILY_LATIN, 400, "whole", None),
-    ("alibaba_sans_bold.ttf", FAMILY_LATIN, 700, "whole", None),
+    ("inter-latin-wght-normal.woff2", FAMILY_LATIN, "100 900", "whole"),
+    ("inter-latin-ext-wght-normal.woff2", FAMILY_LATIN, "100 900", "whole"),
+    ("jetbrains-mono-latin-wght-normal.woff2", FAMILY_MONO, "100 800", "whole"),
 ]
 
 SCAN_SUFFIXES = (".js", ".css", ".html", ".json")
 
-# README.md is rendered AT RUNTIME inside the page, so its glyphs must be in the subset
-# too — otherwise the README silently falls back to the system font. It is not under
-# src/, so it is listed explicitly.
+# Kept for the glyph-coverage probe, which still reports what the frame's own faces cover.
 EXTRA_SCAN_FILES = ("README.md",)
 
 
@@ -224,10 +242,9 @@ def build_frame(template: str, styles: str, modules: str) -> str:
 def collect_chars(src_dir: Path) -> str:
     """Every non-ASCII, non-space character in the page sources and rendered files.
 
-    Scans the WHOLE src/ tree now, not just client.js. When the page was one file this was
-    equivalent; with 24 modules, scanning only client.js would leave every new page's Chinese
-    text out of the subset — and a missing glyph falls back to the system font SILENTLY, so
-    the only symptom is text that looks slightly wrong.
+    NO LONGER DRIVES SUBSETTING — nothing is subset any more (see the note at the top of this
+    file). It is kept because the build prints it: the count is how you notice that a page's
+    Chinese copy changed, and it is the denominator for the coverage probe.
     """
     found: set[str] = set()
     scanned = 0
@@ -258,42 +275,19 @@ def collect_chars(src_dir: Path) -> str:
     return chars
 
 
-def build_cjk(source: Path, charset: str, target: Path) -> int:
-    """Subset a CJK face to `charset` and write WOFF2. Returns bytes written."""
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".txt", encoding="utf-8", delete=False
-    ) as handle:
-        handle.write(charset)
-        charset_file = Path(handle.name)
-
-    try:
-        subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "fontTools.subset",
-                str(source),
-                f"--text-file={charset_file}",
-                f"--output-file={target}",
-                "--flavor=woff2",
-                "--layout-features=kern,liga,clig,calt",
-                "--no-hinting",
-                "--desubroutinize",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as error:
-        sys.exit(f"error: pyftsubset failed on {source.name}\n{error.stderr}")
-    finally:
-        charset_file.unlink(missing_ok=True)
-
-    return target.stat().st_size
-
-
 def build_latin(source: Path, target: Path) -> int:
-    """Convert a Latin face to WOFF2 whole — no subsetting. Returns bytes written."""
+    """Normalise a face to WOFF2. Returns bytes written.
+
+    The vendored Inter/JetBrains files are ALREADY woff2 (that is how Fontsource ships them),
+    so the common path is a byte copy — the point of routing through fontTools is to fail
+    loudly if a future source is a TTF, rather than shipping a mislabelled file that the
+    browser refuses to parse (which shows up only as "the font silently did not load").
+    """
+    data = source.read_bytes()
+    if data[:4] == b"wOF2":
+        target.write_bytes(data)
+        return len(data)
+
     try:
         from fontTools.ttLib import TTFont
     except ImportError:  # pragma: no cover
@@ -309,27 +303,26 @@ def build_latin(source: Path, target: Path) -> int:
     return target.stat().st_size
 
 
-def font_face_css(font_dir: Path, charset: str, scratch: Path, fallback_dir: Path | None = None) -> tuple[str, list[tuple[str, int, int]]]:
-    """Build every face, return (css, [(label, woff2_bytes, base64_bytes)])."""
+def font_face_css(font_dir: Path, charset: str, scratch: Path) -> tuple[str, list[tuple[str, int, int]]]:
+    """Build every face, return (css, [(label, woff2_bytes, base64_bytes)]).
+
+    `charset` is accepted and ignored: it used to drive the CJK subset. Nothing is subset any
+    more — see the note at the top of this file for why subsetting was the wrong shape.
+    """
     blocks: list[str] = []
     report: list[tuple[str, int, int]] = []
 
-    for filename, family, weight, mode, fallback_name in FACES:
+    for filename, family, weight, mode in FACES:
         source = font_dir / filename
-        if not source.is_file() and fallback_name is not None and fallback_dir is not None:
-            candidate = fallback_dir / fallback_name
-            if candidate.is_file():
-                print(f"note: {filename} is absent; using {fallback_name} from the fallback dir")
-                source = candidate
         if not source.is_file():
-            sys.exit(f"error: missing source font {font_dir / filename}")
+            sys.exit(
+                f"error: missing vendored font {source}\n"
+                "       these are committed under assets/fonts/ — restore them rather than\n"
+                "       pointing the build at another project's asset tree."
+            )
 
         target = scratch / f"{source.stem}.woff2"
-        raw_size = (
-            build_cjk(source, charset, target)
-            if mode == "subset"
-            else build_latin(source, target)
-        )
+        raw_size = build_latin(source, target)
 
         payload = base64.b64encode(target.read_bytes()).decode("ascii")
         report.append((f"{family} {weight} ({mode})", raw_size, len(payload)))
@@ -616,9 +609,8 @@ def main() -> None:
     parser.add_argument("--src", type=Path, default=DEFAULT_SRC, help="the outer bundle template")
     parser.add_argument("--src-dir", type=Path, default=DEFAULT_SRC_DIR, help="the module tree")
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT, help="generated client.js")
-    parser.add_argument("--font-dir", type=Path, default=DEFAULT_FONT_DIR)
-    parser.add_argument("--fallback-font-dir", type=Path, default=DEFAULT_FALLBACK_FONT_DIR,
-                        help="where to look for a face the primary dir no longer has")
+    parser.add_argument("--font-dir", type=Path, default=VENDOR_FONT_DIR,
+                        help="directory holding the vendored Inter / JetBrains Mono faces")
     parser.add_argument("--dry-run", action="store_true", help="report sizes without writing")
     parser.add_argument("--frames-only", action="store_true",
                         help="rebuild the frame with an empty font block (fast frame iteration)")
@@ -651,12 +643,11 @@ def main() -> None:
         report: list[tuple[str, int, int]] = []
     else:
         if not args.font_dir.is_dir():
-            sys.exit(f"error: font dir not found: {args.font_dir}")
-        charset = collect_chars(args.src_dir)
-        if not charset:
-            sys.exit("error: no non-ASCII characters found; nothing to subset")
+            sys.exit(f"error: vendored font dir not found: {args.font_dir}")
+        # Printed for visibility only — this no longer decides what goes in the face.
+        collect_chars(args.src_dir)
         with tempfile.TemporaryDirectory() as scratch:
-            css, report = font_face_css(args.font_dir, charset, Path(scratch), args.fallback_font_dir)
+            css, report = font_face_css(args.font_dir, "", Path(scratch))
 
         print()
         print(f"{'face':<34}{'woff2':>10}{'base64':>12}")
@@ -686,7 +677,8 @@ def main() -> None:
     banner = (
         "// GENERATED by tools/build-font-css.py — do not edit by hand.\n"
         "// Source of truth: src/ (assembled in the order src/app/manifest.json declares).\n"
-        "// Fonts: Alibaba PuHuiTi 3.0 (CJK, subset to page copy) + Alibaba Sans (Latin, whole).\n"
+        "// Fonts: Inter Variable + JetBrains Mono Variable (Latin/mono, inlined whole).\n"
+        "// CJK comes from the operating system — see the note at the top of the build script.\n"
     )
     body = template.replace(PLACEHOLDER, css).replace("/*__FRAME_DOCUMENT__*/", frame_literal)
     args.out.parent.mkdir(parents=True, exist_ok=True)

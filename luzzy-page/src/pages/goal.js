@@ -113,8 +113,14 @@
         ? '页面拿到的会话标识不合法，这是页面这边的 bug，不是你的数据有问题。'
         : isUnavailable
           ? '这个会话没有加载在本进程里，所以读不到它的运行时目标。在左侧打开这个会话后回到这里，目标就会出现。下面的计划是这个会话上次留下的记录。'
-          : '让 Agent 开始一个长任务，它会建立一个目标；你也可以在输入框里直接说「把这件事做成一个目标」。'
-      const actions = LZ.Card.btnBar([{ label: '刷新', id: 'goalRefresh' }])
+          : '这里还没有目标。长任务需要一个目标才有「什么时候算完成」可言 —— 你可以直接在这里建一个，也可以让 Agent 在对话里建。'
+      // 「建目标」是这一页**唯一**能把目标带进存在的入口，所以它在这里，而不是只让用户去
+      // 对话里求 Agent。以前没有这个按钮，于是唯一的路是 DSH 内置的 create_goal 工具 —— 控制台
+      // 就成了一个看板，而不是控制面。
+      const actions = LZ.Card.btnBar([
+        { label: '建立目标', variant: 'btnSmall btnPrimary', id: 'goalCreate' },
+        { label: '刷新', id: 'goalRefresh' },
+      ])
       return LZ.Card.card({
         title: '目标概览',
         count: '没有运行时目标',
@@ -166,12 +172,48 @@
       // 顺带把那个 `{ spacer: true }` 去掉了：抬头本来就有自己的 `.spacer`，再来一个会把
       // 按钮推到中间。动作属于抬头，正文属于内容。
       actions: LZ.Card.btnBar([
+        // 生命周期按钮按**当前阶段**给，不给全部四个。
+        //
+        // 四个都摆出来会让用户去试哪个能用（点「恢复」而目标是 active 时只会拿到一个拒绝），
+        // 而阶段机的规则属于 @deepseek-ai/dsh-goal，页面不该在按钮可见性上再写一遍它的判断。
+        // 折中是：每个阶段只显示确定合法的那一个，非法组合根本不出现，因此也点不出错误。
+        ...lifecycleButtons(goal, view),
         { label: '刷新', id: 'goalRefresh' },
         { label: '完整计划', attrs: 'data-viewer="plan" data-viewer-title="完整目标与计划"' },
         { label: '查看 goal.md', id: 'goalRawToggle', attrs: 'aria-expanded="' + String(LZ.App.isRawOpen()) + '"' },
       ]),
       body: head + summary + expected + meta + blocked,
     })
+  }
+
+  /**
+   * The lifecycle control for the goal's current phase.
+   *
+   * One button, chosen by phase — see the note at the call site for why not all four.
+   * `complete` is only offered when the completion gate would actually allow it: the gate is
+   * the whole point of this system, and a button that is guaranteed to be refused teaches the
+   * user that the gate is noise.
+   */
+  function lifecycleButtons(goal, view) {
+    if (goal === null || goal === undefined) return [{ label: '建立目标', variant: 'btnSmall btnPrimary', id: 'goalCreate' }]
+    switch (goal.phase) {
+      case 'active':
+        return [
+          { label: '暂停', id: 'goalPause' },
+          ...(view.completionAllowed === true
+            ? [{ label: '标记完成', variant: 'btnSmall btnPrimary', id: 'goalComplete' }]
+            : []),
+        ]
+      case 'paused':
+      case 'blocked':
+        return [{ label: '恢复', variant: 'btnSmall btnPrimary', id: 'goalResume' }]
+      case 'complete':
+        // A completed goal cannot be resumed (the service refuses it) — it must be cleared or
+        // replaced. Saying so is more useful than a disabled button nobody can explain.
+        return [{ label: '新建目标（替换已完成的）', id: 'goalCreate' }]
+      default:
+        return []
+    }
   }
 
   /* ---------------------------------------------------------------- 当前执行状态 */

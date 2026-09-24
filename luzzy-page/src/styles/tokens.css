@@ -22,85 +22,117 @@
  * 不存在，于是静默回退成硬编码色、两个主题同一套颜色，看起来却像"已经 token 化"了。
  * 真实存在的是 --dsw-alias-state-{success,warn,error,business}-primary，而且暗色下换的是
  * **色相**，不只是明度。下面第 1 层里的每一个名字都对着 DSH 前端 dist 核过。
+ *
+ * ============================================================ 这一版换了什么，以及为什么
+ *
+ * 用户的原话是：「为什么它（dsh-thoughtdag）就这么好看，我们的就观感很差？」并要求
+ * 「完全一样的 UI 设计」。所以这一版不再是自己判断一套色，而是**照抄 thoughtdag 已发布的
+ * token 表**——它打包在 dist-app/assets/index-*.css 里，是作者写下来的值，不是我看着截图猜的。
+ *
+ * 四处关键的差异，每一处都是"观感差"的一个具体来源：
+ *
+ *   1. **两级底色反了。** 我们是 #f8f8f8 画布 + #ffffff 卡（两组都是中性灰），thoughtdag 是
+ *      **暖纸** #faf9f7 画布 + #fff 卡。差别不在明度，在**色温**：中性灰在白色卡片底下读起来
+ *      是"没上色的界面"，暖纸读起来是"有纸感的界面"。这是第一眼观感的主要来源。
+ *
+ *   2. **字太小。** 我们全文由 12px 主导（31 处 --lz-font-sm），thoughtdag 的正文字号是
+ *      15px（Tailwind `text-sm` 被它改写成了 1rem，而基础是 16px），标题一路到 30px。
+ *      「观感差」有相当一部分就是"字小、留白多、看着空"。
+ *
+ *   3. **强调色没有色相。** 我们的 --lz-primary 是近黑 #080808，只有用户选了主色才带色相；
+ *      thoughtdag 的强调色是**紫罗兰 #6b5ce7**，链接、选中、焦点环、按钮都用它。没有彩色
+ *      强调色的界面在截图里就是"灰的"。
+ *
+ *   4. **玻璃用错了地方。** 我们给每张卡片都上了 backdrop-filter + saturate，还铺了两层
+ *      色晕来"给玻璃提供可模糊的内容"。thoughtdag 根本不做玻璃：卡片是**实心白**配 1px 发丝
+ *      描边，加一层很小的投影。在密集的信息面板里，重玻璃让每一张卡都在跟背后的东西互相
+ *      干扰，字先沉下去——这正是它那边干净、我们这边"糊"的原因。
+ *
+ * 字体另说：thoughtdag 的 --font-sans 是
+ * `"Inter Variable", -apple-system, "PingFang SC", "Hiragino Sans GB", "Segoe UI", sans-serif`
+ * ——**拉丁文用 Inter，中文交给操作系统**。我们原来内联了一个"按页面文案子集化"的中文字体，
+ * 那是错的：控制台渲染的目标、任务、证据、提示词全是运行时才到的文本，子集里没有的字会
+ * **逐字回退**到系统字体，同一句话里字重和字宽都不一样，而且不报错。现在照它那样做，
+ * 这个洞是**结构性消失**的，不是靠把字表补全。
  */
 
 /* ============================================================ 第 1 + 2 层 · 明色 */
 :root {
   /* ---- 第 1 层：DSH token 名（镜像） ---- */
-  --dsw-alias-label-primary: #080808;
-  --dsw-alias-label-secondary: #666666;
-  --dsw-alias-label-tertiary: #999999;
-  --dsw-alias-border-l2: #eeeeee;
-  --dsw-alias-border-l4: #dddddd;
+  --dsw-alias-label-primary: #1a1a1a;
+  --dsw-alias-label-secondary: #6b6560;
+  --dsw-alias-label-tertiary: #968c77;
+  --dsw-alias-border-l2: #e8e5e0;
+  --dsw-alias-border-l4: #d4cfc7;
   --dsw-alias-bg-layer-1: #ffffff;
-  --dsw-alias-bg-layer-2: #f5f5f5;
+  --dsw-alias-bg-layer-2: #f5f3f0;
   --dsw-alias-interactive-bg-hover: rgba(0, 0, 0, 0.04);
   --dsw-alias-markdown-code-block: rgba(0, 0, 0, 0.04);
-  --dsw-static-deepseek-500: #4d6bfe;
-  --dsw-alias-state-success-primary: #22c55e;
-  --dsw-alias-state-warn-primary: #f59e0b;
-  --dsw-alias-state-warn-label: #dd8629;
-  --dsw-alias-state-error-primary: #ec1313;
-  --dsw-alias-state-business-primary: #4176e6;
+  --dsw-static-deepseek-500: #6b5ce7;
+  --dsw-alias-state-success-primary: #16a34a;
+  --dsw-alias-state-warn-primary: #d97706;
+  --dsw-alias-state-warn-label: #b45309;
+  --dsw-alias-state-error-primary: #dc2626;
+  --dsw-alias-state-business-primary: #6b5ce7;
 
   /* ---- 第 2 层：页面基础 ----
    *
-   * 画布**不是**白的，卡片才是白的。这一条是玻璃能不能看见的全部原因：
-   * `reference/lobehub/DESIGN.md` 定的是 `colorBgLayout: #f8f8f8`（画布）配
-   * `colorBgContainer: #ffffff`（卡片）—— 两级底色，层级先靠它做出来。
-   *
-   * 这里曾经两级都是 `#ffffff`。后果不是「不够好看」，是**整块玻璃变成不存在**：
-   * 半透明白叠在纯白上就是白，`backdrop-filter` 背后没有任何可模糊的差别，
-   * 卡片和实心卡片在屏幕上完全一样。我第一版截图里看到的正是这个 ——
-   * 卡片是平的，玻璃只是写了 CSS 而没发生。对齐回参考值之后，
-   * 卡片才真的比画布亮一档，「它是一块盖在画布上的玻璃」才成立。 */
-  --lz-bg-layout: #f8f8f8;
+   * 画布**不是**白的，卡片才是白的——但两级之间的差别是**色温**，不只是明度。
+   * thoughtdag 的值：surface #faf9f7 / card #fff / wash #f5f3f0 / line #e8e5e0。 */
+  --lz-bg-layout: #faf9f7;
   --lz-bg-container: #ffffff;
-  --lz-bg-container-secondary: #fbfbfb;
+  --lz-bg-container-secondary: #f5f3f0;
   --lz-bg-elevated: #ffffff;
-  --lz-bg-spotlight: #dddddd;
+  --lz-bg-spotlight: #e8e5e0;
 
-  --lz-border: #e3e3e3;
-  --lz-border-secondary: #eeeeee;
+  --lz-border: #e8e5e0;
+  --lz-border-secondary: #f0ede8;
+  /* 发丝描边：1px 但用**半透明**的墨色，压在暖底上比实色灰线更细、更像纸上的划线。 */
+  --lz-line: #e8e5e0;
+  --lz-line-strong: #d4cfc7;
 
-  --lz-text: #080808;
-  --lz-text-secondary: #666666;
-  --lz-text-tertiary: #999999;
-  --lz-text-quaternary: #bbbbbb;
+  --lz-text: #1a1a1a;
+  --lz-text-secondary: #6b6560;
+  --lz-text-tertiary: #968c77;
+  --lz-text-quaternary: #b8b0a0;
 
   /* 填充与悬停：半透明，因此能叠在任何底色上 */
   --lz-fill: rgba(0, 0, 0, 0.12);
   --lz-fill-secondary: rgba(0, 0, 0, 0.06);
-  --lz-fill-tertiary: rgba(0, 0, 0, 0.03);
-  --lz-fill-quaternary: rgba(0, 0, 0, 0.015);
+  --lz-fill-tertiary: rgba(0, 0, 0, 0.035);
+  --lz-fill-quaternary: rgba(0, 0, 0, 0.018);
 
-  --lz-mono: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --lz-font-sans: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  --lz-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --lz-code-bg: rgba(0, 0, 0, 0.04);
 
   /* ---- 强调色 ----
-   * 默认是单色的（近黑），只有用户选了主色才带色相——这是 LobeHub 的既定设计。
-   * 帧内读不到用户主题主色，所以强调色用 DSH 的静态色。 */
-  --lz-primary: #080808;
-  --lz-accent: var(--dsw-static-deepseek-500);
-  --lz-accent-bg: rgba(77, 107, 254, 0.08);
-  --lz-focus-ring: var(--dsw-static-deepseek-500);
+   * thoughtdag 的 accent 就是紫罗兰 #6b5ce7（strong #5a4bd6）。
+   * 链接、选中态、焦点环、主按钮都用它——一个界面有没有"彩色重心"，主要看这一档。 */
+  --lz-accent: #6b5ce7;
+  --lz-accent-strong: #5a4bd6;
+  --lz-accent-bg: rgba(107, 92, 231, 0.1);
+  --lz-accent-faint: rgba(107, 92, 231, 0.06);
+  --lz-primary: #1a1a1a;
+  --lz-focus-ring: #6b5ce7;
 
   /* ---- 六个状态色 ----
    * 执行中 / 成功 / 失败 / 等待 / 阻塞 / 未开始。每档配 -bg 浅底，两种主题下都有对比度。
    * 纪律：颜色**永远不单独承载状态**——徽标必须同时有图标和文字。 */
   --lz-state-running: var(--dsw-alias-state-business-primary);
-  --lz-state-running-bg: rgba(65, 118, 230, 0.1);
+  --lz-state-running-bg: rgba(107, 92, 231, 0.1);
   --lz-state-success: var(--dsw-alias-state-success-primary);
-  --lz-state-success-bg: rgba(34, 197, 94, 0.1);
+  --lz-state-success-bg: rgba(22, 163, 74, 0.1);
   --lz-state-failed: var(--dsw-alias-state-error-primary);
-  --lz-state-failed-bg: rgba(236, 19, 19, 0.1);
+  --lz-state-failed-bg: rgba(220, 38, 38, 0.1);
   --lz-state-waiting: var(--dsw-alias-state-warn-primary);
-  --lz-state-waiting-bg: rgba(245, 158, 11, 0.12);
+  --lz-state-waiting-bg: rgba(217, 119, 6, 0.12);
   /* 阻塞与失败必须分得开：失败是终局，阻塞是「有人得去解一下」。
      同色相靠更实的底、更粗的描边区分，图标与文字再各说一遍。 */
   --lz-state-blocked: var(--dsw-alias-state-error-primary);
-  --lz-state-blocked-bg: rgba(236, 19, 19, 0.16);
-  --lz-state-idle: #999999;
+  --lz-state-blocked-bg: rgba(220, 38, 38, 0.16);
+  --lz-state-idle: #968c77;
   --lz-state-idle-bg: rgba(0, 0, 0, 0.04);
 
   /* ---- 间距：4px 阶梯 ---- 只用于间隙、内边距、外边距 */
@@ -112,91 +144,82 @@
   --lz-space-lg: 24px;
   --lz-space-xl: 32px;
 
-  /* ---- 字号：12 / 14 / 16 / 20 / 24 五档 ----
-   * 没有 13px 这一档——设计系统明说那属于漂移，要归到 12 或 14。 */
-  --lz-font-sm: 12px;
-  --lz-font-base: 14px;
-  --lz-font-lg: 16px;
+  /* ---- 字号 ----
+   *
+   * 这一档是"观感差"最直接的来源，所以把它说清楚。
+   *
+   * 上一版是 12/14/16/20/24，而**全文由 12px 主导**（31 处引用 --lz-font-sm）——一整页读下来
+   * 满屏小字。thoughtdag 的字阶是 13 / 14.4 / 16 / 18 / 24 / 30，正文落在 **15–16px**。
+   *
+   * 所以 --lz-font-base 从 14 提到 15，sm 从 12 提到 13，并把原来缺失的 18 与 30 两档补上
+   * （它们对应 thoughtdag 的 text-lg 与 text-3xl，标题层级需要）。
+   *
+   * 一个必须同时改的东西：**行高**。字号大了、行高不变，正文会挤。thoughtdag 的正文行高是
+   * 1.6（它把 text-sm 的 line-height 写成 1.6），不是我们原来的 1.5714。 */
+  --lz-font-xs: 13px;
+  --lz-font-sm: 13px;
+  --lz-font-base: 15px;
+  --lz-font-lg: 18px;
   --lz-font-xl: 20px;
   --lz-font-2xl: 24px;
-  --lz-line-height: 1.5714;
-  --lz-line-height-sm: 1.6667;
+  --lz-font-3xl: 30px;
+  --lz-line-height: 1.6;
+  --lz-line-height-sm: 1.45;
+  --lz-line-height-tight: 1.3;
   --lz-weight-strong: 600;
+  --lz-weight-bold: 700;
 
-  /* ---- 圆角：4 / 6 / 8 / 12 / 999 ---- 与间距是两套刻度，绝不互相借用 */
+  /* ---- 圆角 ----
+   * thoughtdag 实际用到的是 8 / 12 / 16 / 999（`rounded-lg` = 8px 是主力，卡片是
+   * `rounded-2xl` = 16px，胶囊 999）。我们把 4/6 留作内部小件（徽标、复选框）。 */
   --lz-radius-xs: 4px;
   --lz-radius-sm: 6px;
   --lz-radius: 8px;
   --lz-radius-lg: 12px;
+  --lz-radius-xl: 16px;
   --lz-radius-pill: 999px;
 
   /* ---- 控件高度 ---- */
   --lz-control-sm: 28px;
-  --lz-control: 36px;
+  --lz-control: 34px;
 
   /* ---- 层级 ----
-   * 层级先靠底色与描边做出来，阴影只留给真的浮起来的东西。 */
-  --lz-shadow-raised: 0 3px 1px -1px rgba(26, 26, 26, 0.06);
-  --lz-shadow-popover: 0 8px 16px -4px rgba(0, 0, 0, 0.2);
-  --lz-shadow-modal: 0 20px 20px -8px rgba(0, 0, 0, 0.24);
+   *
+   * 这里整体**降了一档**。上一版卡片用的是"液态玻璃"那套：内高光 + 双层投影 + 20px 模糊
+   * + saturate。在信息密集的面板里那是错的——每张卡都在跟背后互相干扰，字先沉下去。
+   *
+   * thoughtdag 的卡片是实心白 + 1px 描边 + 很小的投影（`shadow-sm` 级别，约
+   * `0 1px 2px rgba(0,0,0,.05)`），浮层才升到 `0 4px 14px`。层级主要靠**底色与描边**做出来，
+   * 阴影只负责"这张卡离纸面 1px"。
+   *
+   * 判据来自 Anthropic 那份 frontend-design：同一种 `rgba(0,0,0,.1)` 阴影刷满全页是
+   * AI 生成设计的识别特征。所以阴影分三档、各有用途，而不是一个值复制。 */
+  --lz-shadow-card: 0 1px 2px rgba(26, 26, 26, 0.04);
+  --lz-shadow-raised: 0 1px 3px rgba(26, 26, 26, 0.08), 0 1px 2px rgba(26, 26, 26, 0.04);
+  --lz-shadow-popover: 0 4px 14px rgba(26, 26, 26, 0.09), 0 2px 4px rgba(26, 26, 26, 0.05);
+  --lz-shadow-modal: 0 8px 28px rgba(26, 26, 26, 0.16);
 
-  /* 玻璃卡片的投影：**两层**，不是一层。
-   *
-   * 这是 Vercel 指南里那条 Layered shadows：「Mimic ambient + direct light with at least
-   * two layers」——单层柔和阴影不算数。第一层紧贴边缘（直射光，收紧轮廓），第二层散得开
-   * （环境光，给浮起来的感觉）。最前面那条内高光是液态玻璃的上缘，它给的是厚度。
-   *
-   * 为什么要在这里写清楚：Anthropic 那份把「每张卡片底下同一层 rgba(0,0,0,.1)」点名为
-   * AI 生成设计的识别特征之一。所以这一条不只是「好看一点」，它是避坑项。 */
-  --lz-shadow-glass:
-    inset 0 1px 0 var(--lz-glass-highlight),
-    0 1px 2px rgba(16, 24, 40, 0.04),
-    0 10px 28px -8px rgba(16, 24, 40, 0.1);
-
-  /* ---- 玻璃质感（液态玻璃 / 毛玻璃）
-   *
-   * 这是**表面**的性质，不是内容的：卡片、浮层、侧边栏共用同一套，所以它必须是 token。
-   * 在各处写 backdrop-filter 字面量会让三者慢慢漂成三种玻璃，而「一页一种玻璃」看起来
-   * 就是没做完。
-   *
-   * 三个值各自有理由，别单独调其中一个：
-   *   blur 20px      再厚就看不见背后有什么了 —— 「毛玻璃」变成「模糊的实色块」
-   *   saturate 1.4   液态玻璃不只是模糊，它让背后的颜色更透出来
-   *   alpha          正文对比度全靠它守住。**这一项没有外部依据可抄** —— 读遍 shadcn /
-   *                  Vercel / Anthropic 三家，只有 Vercel 讲了 backdrop-filter 元素在视图
-   *                  过渡里的技术处理，没有任何一家给出「半透明表面上的文字对比度」验收
-   *                  标准。所以这个值是按本仓实测定的（tools/test-glass-contrast.mjs 在
-   *                  最坏的叠底下算实际对比度），不是抄来的。
-   *  ---- */
-  --lz-glass-blur: 20px;
-  --lz-glass-saturate: 1.4;
-  --lz-glass-card: rgba(255, 255, 255, 0.72);
-  --lz-glass-elevated: rgba(255, 255, 255, 0.86);
-  --lz-glass-sidebar: rgba(255, 255, 255, 0.62);
-  /* 液态玻璃的边缘是**两条**线，不是一条描边：亮的那条给它厚度（Apple 的内高光），
-   * 暗的那条把相邻两块玻璃分开。Vercel 的指南同向：边框与阴影要同时用，
-   * 半透明边框提升边缘清晰度。 */
+  /* 玻璃：**只留给真的浮在别的内容之上的东西**（对话框、弹出菜单、侧栏）。
+   * 卡片不用它——见上面的层级说明。这三个值仍然收在一处，避免各处写散成三种玻璃。 */
+  --lz-glass-blur: 12px;
+  --lz-glass-saturate: 1.2;
+  --lz-glass-card: #ffffff;
+  --lz-glass-elevated: rgba(255, 255, 255, 0.92);
+  --lz-glass-sidebar: #faf9f7;
   --lz-glass-highlight: rgba(255, 255, 255, 0.7);
-  --lz-glass-hairline: rgba(0, 0, 0, 0.06);
+  --lz-glass-hairline: #e8e5e0;
+  --lz-shadow-glass: var(--lz-shadow-card);
 
-  /* 模糊要有东西可模糊。均匀底色上的毛玻璃看起来只是「有点脏的白」——模糊没有产生任何
-   * 可见差别，因为背后本来就没有层次。所以画布底下垫两层极淡的色晕，它存在的唯一理由
-   * 就是给玻璃提供可透的内容。
-   *
-   * **两处都必须落在强调色的色相里**，而且**绝不能用状态色**。
-   * 第一版第二处用的是绿（`rgba(34,197,94,…)` = `--lz-state-success` 的色相）。看截图时
-   * 才发现那是个真错误：这个系统里绿色**是一个词**，意思是「成功」；把它当装饰铺在右下角，
-   * 于是「激活技能清单」那张卡带着一层绿 —— 读者会去找那层绿是什么意思，而它什么都不表示。
-   * DESIGN.md 的原话是「Functional color is reserved for meaning」。所以两处都改回强调色的蓝，
-   * 第二处更深一档，靠深浅而不是靠换色相来区分。
-   *
-   * 位置是**量出来的，不是挑出来的**：内容列居中、最大 1100px，侧边栏占掉 208px，所以卡片
-   * 实际落在视口横向的 20%–90% 一带。第一版把色晕放在 12% 与 104%（都在屏幕外或边缘），
-   * 卡片底下等于什么都没有 —— 截图里玻璃完全没出现。现在两处都挪进卡片覆盖的范围。 */
-  --lz-canvas-glow-a: rgba(77, 107, 254, 0.16);
-  --lz-canvas-glow-b: rgba(77, 107, 254, 0.1);
-  --lz-canvas-glow-size-a: 1100px 760px;
-  --lz-canvas-glow-size-b: 900px 640px;
+  /* 画布底纹：thoughtdag 的纸面上有一层极淡的网格（`--canvas-grid-fine`）。它在暖底上给
+   * 页面一个"这是一张纸"的暗示。刻意做得几乎看不见——它的作用是让大片留白不显得空。 */
+  --lz-canvas-grid: rgba(84, 100, 128, 0.055);
+  --lz-canvas-grid-major: rgba(84, 100, 128, 0.09);
+  --lz-canvas-grid-size: 24px;
+  /* 兼容旧引用：色晕不再是设计的一部分，压成全透明。 */
+  --lz-canvas-glow-a: transparent;
+  --lz-canvas-glow-b: transparent;
+  --lz-canvas-glow-size-a: 0 0;
+  --lz-canvas-glow-size-b: 0 0;
 
   /* ---- 动效 ----
    * 动效是澄清变化，不是装饰。状态变化 100–200ms，浮层最多 ~300ms。 */
@@ -206,45 +229,49 @@
   --lz-ease: cubic-bezier(0.2, 0, 0, 1);
 
   /* ---- 布局 ---- */
-  --lz-column-max: 1100px;
+  --lz-column-max: 100%;
   --lz-page-pad: var(--lz-space-lg);
 }
 
 /* ============================================================ 第 1 + 2 层 · 暗色
  * 只换颜色。间距、字号、圆角、控件、动效与明色完全一致。
- * 暗色下表面是「越往上越亮」，与明色相反——别把两级底色压成一层。 */
+ *
+ * thoughtdag 的暗色是暖黑而不是中性黑：#211e18 surface / #322d25 card / #ede7da ink，
+ * 强调色提亮成 #a79ff4。照它的值——把色温一起换掉，明暗两套才不会一个像纸、一个像塑料。 */
 :root[data-theme='dark'] {
   /* ---- 第 1 层 ---- */
-  --dsw-alias-label-primary: #ffffff;
-  --dsw-alias-label-secondary: #aaaaaa;
-  --dsw-alias-label-tertiary: #6f6f6f;
-  --dsw-alias-border-l2: #1a1a1a;
-  --dsw-alias-border-l4: #2a2a2a;
-  --dsw-alias-bg-layer-1: #0d0d0d;
-  --dsw-alias-bg-layer-2: #1a1a1a;
+  --dsw-alias-label-primary: #ede7da;
+  --dsw-alias-label-secondary: #b5ab97;
+  --dsw-alias-label-tertiary: #948a73;
+  --dsw-alias-border-l2: #4c4536;
+  --dsw-alias-border-l4: #5e5645;
+  --dsw-alias-bg-layer-1: #322d25;
+  --dsw-alias-bg-layer-2: #3b352b;
   --dsw-alias-interactive-bg-hover: rgba(255, 255, 255, 0.06);
   --dsw-alias-markdown-code-block: rgba(255, 255, 255, 0.06);
-  --dsw-static-deepseek-500: #6b83ff;
-  --dsw-alias-state-success-primary: #22c55e;
-  --dsw-alias-state-warn-primary: #f59e0b;
-  --dsw-alias-state-warn-label: #dd8629;
-  --dsw-alias-state-error-primary: #f25a5a;
-  --dsw-alias-state-business-primary: #679efe;
+  --dsw-static-deepseek-500: #a79ff4;
+  --dsw-alias-state-success-primary: #7fbf8e;
+  --dsw-alias-state-warn-primary: #d9a83e;
+  --dsw-alias-state-warn-label: #e2b558;
+  --dsw-alias-state-error-primary: #e0796f;
+  --dsw-alias-state-business-primary: #a79ff4;
 
   /* ---- 第 2 层 ---- */
-  --lz-bg-layout: #000000;
-  --lz-bg-container: #0d0d0d;
-  --lz-bg-container-secondary: #070707;
-  --lz-bg-elevated: #1a1a1a;
-  --lz-bg-spotlight: #2d2d2d;
+  --lz-bg-layout: #211e18;
+  --lz-bg-container: #322d25;
+  --lz-bg-container-secondary: #2a251e;
+  --lz-bg-elevated: #3b352b;
+  --lz-bg-spotlight: #4c4536;
 
-  --lz-border: #202020;
-  --lz-border-secondary: #1a1a1a;
+  --lz-border: #4c4536;
+  --lz-border-secondary: #3b352b;
+  --lz-line: #4c4536;
+  --lz-line-strong: #5e5645;
 
-  --lz-text: #ffffff;
-  --lz-text-secondary: #aaaaaa;
-  --lz-text-tertiary: #6f6f6f;
-  --lz-text-quaternary: #555555;
+  --lz-text: #ede7da;
+  --lz-text-secondary: #b5ab97;
+  --lz-text-tertiary: #948a73;
+  --lz-text-quaternary: #6f6656;
 
   --lz-fill: rgba(255, 255, 255, 0.16);
   --lz-fill-secondary: rgba(255, 255, 255, 0.1);
@@ -253,36 +280,35 @@
 
   --lz-code-bg: rgba(255, 255, 255, 0.06);
 
-  --lz-primary: #eeeeee;
-  --lz-accent-bg: rgba(96, 177, 255, 0.12);
+  --lz-accent: #a79ff4;
+  --lz-accent-strong: #b9b2f7;
+  --lz-accent-bg: rgba(167, 159, 244, 0.14);
+  --lz-accent-faint: rgba(167, 159, 244, 0.08);
+  --lz-primary: #ede7da;
 
   /* 暗色下这几档换的是**色相**：error 从 volcano 换成 red，business 从 geekblue 换成 blue。
      照抄明色会让暗色下的绿和红都发闷。 */
-  --lz-state-running-bg: rgba(103, 158, 254, 0.16);
-  --lz-state-success-bg: rgba(34, 197, 94, 0.16);
-  --lz-state-failed-bg: rgba(242, 90, 90, 0.16);
-  --lz-state-waiting-bg: rgba(245, 158, 11, 0.16);
-  --lz-state-blocked-bg: rgba(242, 90, 90, 0.22);
-  --lz-state-idle: #6f6f6f;
+  --lz-state-running-bg: rgba(167, 159, 244, 0.16);
+  --lz-state-success-bg: rgba(127, 191, 142, 0.16);
+  --lz-state-failed-bg: rgba(224, 121, 111, 0.16);
+  --lz-state-waiting-bg: rgba(217, 168, 62, 0.16);
+  --lz-state-blocked-bg: rgba(224, 121, 111, 0.22);
+  --lz-state-idle: #948a73;
   --lz-state-idle-bg: rgba(255, 255, 255, 0.06);
 
-  --lz-shadow-raised: 0 3px 1px -1px rgba(0, 0, 0, 0.4);
-  --lz-shadow-popover: 0 8px 16px -4px rgba(0, 0, 0, 0.5);
-  --lz-shadow-modal: 0 20px 20px -8px rgba(0, 0, 0, 0.6);
+  /* 暗色下投影要更重：黑底上浅色阴影看不见，只能靠更深的暗部把层次压出来。 */
+  --lz-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --lz-shadow-raised: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --lz-shadow-popover: 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --lz-shadow-modal: 0 8px 28px rgba(0, 0, 0, 0.6);
 
-  /* ---- 玻璃质感 · 暗色
-   * 暗色下玻璃是**浅黑而不是浅白**：表面越往上越亮那条规则照旧（见 DESIGN.dark.md），
-   * 所以玻璃的 alpha 比明色高一点 —— 黑色本身就吃光，太透会让内容糊在画布上。 */
-  --lz-glass-card: rgba(24, 24, 27, 0.66);
-  --lz-glass-elevated: rgba(32, 32, 36, 0.82);
-  --lz-glass-sidebar: rgba(14, 14, 16, 0.6);
+  --lz-glass-card: #322d25;
+  --lz-glass-elevated: rgba(59, 53, 43, 0.92);
+  --lz-glass-sidebar: #211e18;
   --lz-glass-highlight: rgba(255, 255, 255, 0.08);
-  --lz-glass-hairline: rgba(255, 255, 255, 0.06);
-  /* 暗色下的投影要更重：黑底上浅色阴影看不见，只能靠更深的暗部把层次压出来。 */
-  --lz-shadow-glass:
-    inset 0 1px 0 var(--lz-glass-highlight),
-    0 1px 2px rgba(0, 0, 0, 0.4),
-    0 10px 28px -8px rgba(0, 0, 0, 0.55);
-  --lz-canvas-glow-a: rgba(96, 177, 255, 0.16);
-  --lz-canvas-glow-b: rgba(96, 177, 255, 0.1);
+  --lz-glass-hairline: #4c4536;
+  --lz-shadow-glass: var(--lz-shadow-card);
+
+  --lz-canvas-grid: rgba(237, 231, 218, 0.05);
+  --lz-canvas-grid-major: rgba(237, 231, 218, 0.08);
 }

@@ -67,8 +67,20 @@ function showDialog(spec) {
 
     let input = null
     if (typeof spec.input === 'string') {
-      input = document.createElement('input')
+      // `lines > 1` gives a textarea. A goal objective is routinely a paragraph, and a
+      // single-line input silently swallows the newlines a user types — the text arrives
+      // flattened with no indication that anything was lost. Everything downstream (the
+      // service, the artifact, the injected block) preserves newlines, so only this widget
+      // was ever the bottleneck.
+      const lines = Number.isSafeInteger(spec.lines) && spec.lines > 1 ? spec.lines : 1
+      input = document.createElement(lines > 1 ? 'textarea' : 'input')
       input.className = 'dialogInput'
+      if (lines > 1) {
+        input.rows = lines
+        // Enter inserts a newline in a textarea; the dialog's own key handler must not treat
+        // it as "confirm", or a multi-line objective could never be typed.
+        input.setAttribute('data-multiline', 'true')
+      }
       input.value = spec.input
       input.setAttribute('aria-label', spec.title)
       box.appendChild(input)
@@ -124,7 +136,15 @@ function showDialog(spec) {
       if (event.key === 'Escape') {
         event.preventDefault()
         finish(false)
-      } else if (event.key === 'Enter' && input !== null && event.target === input) {
+      } else if (
+        event.key === 'Enter' &&
+        input !== null &&
+        event.target === input &&
+        // A multiline input must be able to receive Enter as a newline. Without this the
+        // dialog confirmed on the first Enter and the user could never write a second line —
+        // and it would look like the textarea simply did not work.
+        input.getAttribute('data-multiline') !== 'true'
+      ) {
         event.preventDefault()
         finish(true)
       }
@@ -151,8 +171,8 @@ function showConfirm(title, body, confirmLabel) {
     return result.confirmed === true
   })
 }
-function showPrompt(title, initial, confirmLabel) {
-  return showDialog({ title: title, input: initial, confirmLabel: confirmLabel || '确定' }).then(function (result) {
+function showPrompt(title, initial, confirmLabel, lines) {
+  return showDialog({ title: title, input: initial, confirmLabel: confirmLabel || '确定', lines: lines || 1 }).then(function (result) {
     return result.confirmed ? result.value : null
   })
 }

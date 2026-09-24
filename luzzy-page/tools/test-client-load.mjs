@@ -343,7 +343,17 @@ if (entry) {
       const doc = typeof props.srcDoc === 'string' ? props.srcDoc : ''
 
       check('iframe carries a srcDoc document', doc.startsWith('<!doctype html>'))
-      check('frame document is self-contained (fonts inlined)', (doc.match(/@font-face/g) ?? []).length === 4)
+      // The requirement is that the frame makes NO external request, not that it declares a
+      // particular number of faces. This read `… === 4` — a count of the four subset faces —
+      // and went red when the CJK half moved to the operating system's fonts (the reference
+      // stack does the same), even though the frame was still perfectly self-contained. A
+      // hardcoded inventory is not a property.
+      {
+        const faces = doc.match(/@font-face\s*\{[^}]*\}/g) ?? []
+        const inlined = faces.filter((block) => /src:\s*url\(data:font\/woff2;base64,/.test(block))
+        check('frame document is self-contained (every font face inlined)', faces.length > 0 && inlined.length === faces.length,
+          `${faces.length} declared, ${inlined.length} inlined`)
+      }
       check('frame document has no external url', !/url\((?!data:)/.test(doc))
       check('iframe width is 100% (fills the pane)', props.style.width === '100%', JSON.stringify(props.style.width))
       check('iframe has a title for a11y', typeof props.title === 'string' && props.title.length > 0)
@@ -572,9 +582,34 @@ if (entry) {
       .flat()
     const nested = blurOwners.filter((sel) => /callout|focusBox|proposal|badge|row\b/.test(sel))
     check('no surface nested inside a card grows its own blur', nested.length === 0, nested.join(', '))
+
+    // ============================================================ 这一节改了
+    //
+    // 原来这里断言「承载玻璃的层级至少有四层」，因为上一版把玻璃当成整个界面的材质：
+    // 侧栏 0.62 < 卡片 0.72 < 浮层 0.86，四档通透度。
+    //
+    // 用户看过 dsh-thoughtdag 之后要求「完全一样的 UI 设计」，而参考设计**不用玻璃做卡片**：
+    // 卡片是实心白 + 1px 发丝描边 + 很小的投影，整个应用里唯一 backdrop-blur 的地方是浮在
+    // 画布之上的小控件。在信息密集的看板里，每张卡都半透明模糊会让每一张都跟背后互相干扰，
+    // 正文要透过两层灰才落到眼睛里 —— 那正是「观感差」。
+    //
+    // 所以断言必须跟着设计走，而不是把旧设计的数字钉在那里。**但断言本身不能变松**：新设计
+    // 有一条同样确定、同样会失败的性质 —— 卡片不许有模糊，模糊只留给真的浮在别的内容之上的
+    // 东西。这三条一起构成它，而且都能被打红（prove-console-shell 的相应臂）。
+    check('the card does NOT blur what is behind it', !/\.card\s*\{[^}]*backdrop-filter/.test(cssRules),
+      'a card with backdrop-filter is the old glass design; the reference uses solid white')
+
+    // 浮层仍然保留玻璃，因为它是真的盖在别的内容之上：对话框、侧栏、通知条。
+    check('floating surfaces still carry the blur',
+      blurOwners.some((sel) => /dialog/.test(sel)) && blurOwners.some((sel) => /rail/.test(sel)),
+      `blur owners: ${[...new Set(blurOwners)].join(', ')}`)
+
+    // ……而玻璃的档数**变少了**，这正是设计意图，不是遗漏：卡片那一档被移除了。
+    // 上限 4 = dialog + rail + noticeBar 三个选择器（外加可能的 .dsh-td-* 之类），再多就说明
+    // 有人把卡片或卡片内部的东西又加回了模糊。
     const tiers = [...new Set(blurOwners)]
-    check('and the surface tiers that carry it are the outer ones',
-      tiers.length >= 4 && tiers.length <= 8, tiers.join(', '))
+    check('and the blur is confined to a few outer surfaces, not spread over the page',
+      tiers.length >= 2 && tiers.length <= 5, tiers.join(', '))
     // backdrop-filter 不被支持时卡片必须退回实底 —— 否则它只是一块半透明的壳，
     // 文字压在画布色晕上，对比度掉到读不清，而且不报错。
     check('and there is a fallback for engines without backdrop-filter',

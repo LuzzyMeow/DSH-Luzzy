@@ -10,22 +10,27 @@
  *
  * 一张卡片 = 一个可独立阅读的单元。
  *
- * 它是玻璃的第二档（侧边栏 0.62 < 卡片 0.72 < 浮层 0.86）。三档不是随手排的：
- * Anthropic 那份把「所有卡片同一个圆角、同一层阴影」点名为失败形态，而玻璃恰好是最容易
- * 犯这个错的材质——全部半透明就等于全部在同一层。所以强度必须分档，**层级靠通透度说话**。
+ * ============================================================ 实心白 + 发丝描边
  *
- * 描边用半透明发丝线而不是实色 `--lz-border-secondary`：实色描边压在玻璃上会把它变成
- * 一张实心卡片，玻璃感就没了。这也正是 Vercel 那条「半透明边框提升边缘清晰度」的用法。
+ * 这一节原来是「液态玻璃」那套：半透明底 + 20px backdrop-filter + saturate(1.4) + 内高光 +
+ * 双层投影，还专门铺了两层色晕「给玻璃提供可模糊的内容」。用户在对比图里问
+ * 「为什么它就这么好看，我们的就观感很差」，而这是第一位的答案。
  *
- * 圆角保持 8px（`--lz-radius`）。**没有为了「更玻璃」而加大圆角**：半径是另一套刻度，
- * 把圆角当成玻璃的装饰是个单独的决定，而这次没有理由动它——一页一种圆角仍然成立。 */
+ * 参考设计（dsh-thoughtdag）的卡片是**实心白**：`bg-card` = #fff，1px `border-line`
+ * = #e8e5e0，加一层很小的投影（`shadow-sm` 量级，约 0 1px 2px rgba(0,0,0,.05)）。它整个
+ * 应用里唯一用 backdrop-blur 的地方是**浮在画布上的小控件**，不是卡片。
+ *
+ * 为什么那是对的、而重玻璃在这里是错的：这是一个信息密集的看板，一屏有六到八张卡。
+ * 每张卡都半透明并模糊背后，就等于每一张都在跟背后的东西互相干扰，正文要透过两层灰才落到
+ * 眼睛里 —— 字先沉下去。实心白则让「读」这件事回到字与底两个人的事。层级改由**底色与描边**
+ * 承担（暖纸画布 #faf9f7 vs 白卡），阴影只负责「这张卡离纸面 1px」。
+ *
+ * 圆角保持 8px（`--lz-radius`）：半径是另一套刻度，一页一种圆角仍然成立。 */
 .card {
-  border: 1px solid var(--lz-glass-hairline);
-  border-radius: var(--lz-radius);
-  background: var(--lz-glass-card);
-  backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
-  -webkit-backdrop-filter: blur(var(--lz-glass-blur)) saturate(var(--lz-glass-saturate));
-  box-shadow: var(--lz-shadow-glass);
+  border: 1px solid var(--lz-line);
+  border-radius: var(--lz-radius-lg);
+  background: var(--lz-bg-container);
+  box-shadow: var(--lz-shadow-card);
   padding: var(--lz-space-base) var(--lz-space-md);
   min-width: 0;
   /* 卡片是**一个等高格子**，高度由外面那层网格给，内容长了在卡片内部滚。 */
@@ -92,12 +97,17 @@
 
 .cardHead .spacer { flex: 1 1 auto; }
 
-/* 卡片副标题：一句话说明这张卡在回答什么 */
+/* 卡片副标题：一句话说明这张卡在回答什么。
+ *
+ * 用 --lz-font-base（15px）而不是 --lz-font-sm。实测这个选择器是整页里最大的一块小字：
+ * 280 字，占全文 79.5% —— 而且它是**整句的说明性散文**（「这几项没齐之前，Agent 的工具调用
+ * 会被拒——不是故障，是启动协议…」），不是标签。把一段给人读的话排成 13px，就是「观感差」
+ * 最直接的来源。标签（.metricLabel / .kvLabel / .railBrand）留在 13px，它们本来就该安静。 */
 .cardSub {
   margin: calc(var(--lz-space-xs) * -1) 0 var(--lz-space-sm);
-  font-size: var(--lz-font-sm);
-  line-height: var(--lz-line-height-sm);
-  color: var(--lz-text-tertiary);
+  font-size: var(--lz-font-base);
+  line-height: var(--lz-line-height);
+  color: var(--lz-text-secondary);
 }
 
 /* 卡片内的块间距：卡片自己不管孩子，孩子之间靠这个栈 */
@@ -466,11 +476,14 @@ details.treeBranch[open] > summary.treeRow .treeArrow { transform: rotate(90deg)
 
 .rowText { margin: 0; color: var(--lz-text); overflow-wrap: anywhere; }
 
+/* 行内副文本。同 .cardSub：它承载的是**句子**（「还没有写。这一格要一段话 —— 这个目标在
+ * 做什么。」），不是标签，所以走正文字号。实测它是第二块小字（100 字），和 .cardSub 一起
+ * 构成「整页由小字主导」的全部原因。 */
 .rowSub {
   margin: var(--lz-space-xxs) 0 0;
-  font-size: var(--lz-font-sm);
-  line-height: var(--lz-line-height-sm);
-  color: var(--lz-text-tertiary);
+  font-size: var(--lz-font-base);
+  line-height: var(--lz-line-height);
+  color: var(--lz-text-secondary);
   overflow-wrap: anywhere;
 }
 
@@ -825,6 +838,16 @@ code, .mono {
   color: var(--lz-text);
   font: inherit;
   font-size: var(--lz-font-base);
+}
+
+/* 多行输入（textarea）的差异：换行要保住，所以不能是单行控件那套。 */
+textarea.dialogInput {
+  display: block;
+  resize: vertical;
+  min-height: 6em;
+  line-height: var(--lz-line-height);
+  /* 目标正文常是散文，等宽字体会让它读起来像代码。 */
+  font-family: var(--lz-font-sans);
 }
 
 .dialogInput:focus-visible { outline: 2px solid var(--lz-focus-ring); outline-offset: 1px; }
@@ -1434,7 +1457,7 @@ code, .mono {
   /* Positions the empty-state hint (below), which overlays the first line rather than
      occupying a line of its own. */
   position: relative;
-  font-family: 'Luzzy Sans', 'Luzzy PuHuiTi', system-ui, sans-serif;
+  font-family: var(--lz-font-sans);
   font-size: 14px; line-height: 1.72;
   color: var(--dsw-alias-label-primary, #080808);
 }

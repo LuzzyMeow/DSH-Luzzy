@@ -465,6 +465,12 @@
       health: payload.summary ? payload.summary.health : 'needs-attention',
       healthLabel: payload.summary ? (HEALTH_LABEL[payload.summary.health] || payload.summary.health) : '未知',
       healthState: payload.summary ? LZ.StatusBadge.toneOf(payload.summary.health) : 'idle',
+      // 完成门是否放行。页面用它决定「标记完成」按钮出不出现 —— 一个必然被拒的按钮会教用户
+      // 把这道门当成噪音，而这道门是整个系统的重点。缺字段时按 false：不确定就不给按钮。
+      completionAllowed: payload.summary ? payload.summary.can_complete === true : false,
+      completionBlockedBy: payload.summary && Array.isArray(payload.summary.completion_blocked_by)
+        ? payload.summary.completion_blocked_by
+        : [],
       counters: payload.counters || null,
       enforcement: payload.enforcement || null,
     }

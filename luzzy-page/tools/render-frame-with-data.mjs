@@ -27,7 +27,20 @@ const argValue = (name, fallback) => {
   const i = args.indexOf(name)
   return i >= 0 ? args[i + 1] : fallback
 }
-const tab = argValue('--tab', 'usage')
+const tab = argValue('--tab', 'goal')
+
+// Refuse an unknown tab instead of silently rendering the default one.
+//
+// `agent` is not a sub-page — the tab set is goal / system / preset / readme — and passing it
+// produced a picture of the GOAL page that was BYTE-IDENTICAL to the goal one (same sha256).
+// That is the §5.7 judgement exactly: two screenshots that should differ and do not mean the
+// second was never verified. A silent fallback here manufactures evidence for a page nobody
+// looked at, which is worse than an error.
+const TABS = ['goal', 'system', 'preset', 'readme']
+if (!TABS.includes(tab)) {
+  console.error(`unknown tab ${JSON.stringify(tab)} — expected one of: ${TABS.join(', ')}`)
+  process.exit(2)
+}
 const windowName = argValue('--window', 'day')
 const mode = argValue('--mode', 'line')
 const dark = args.includes('--dark')

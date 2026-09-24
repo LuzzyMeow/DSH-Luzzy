@@ -15,7 +15,10 @@ html, body {
 }
 
 body {
-  font-family: 'Luzzy Sans', 'Luzzy PuHuiTi', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* 走 token，不写字面量。上一版这里把字体族写死成两个已经不再内联的旧face，于是改了
+   * tokens.css 的 --lz-font-sans 也毫无作用 —— 页面继续用一个不存在的字体名，逐字回退。
+   * 实测抓到的：computed font-family 还是 "Luzzy Sans", "Luzzy PuHuiTi"。 */
+  font-family: var(--lz-font-sans);
   font-size: var(--lz-font-base);
   line-height: var(--lz-line-height);
   -webkit-font-smoothing: antialiased;

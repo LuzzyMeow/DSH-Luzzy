@@ -402,6 +402,48 @@ async function handlePost(ctx, req, res, deps) {
       return
     }
 
+    // ---- runtime goal lifecycle: create / pause / resume / complete / clear-goal
+    //
+    // WHY THE PAGE NEEDS THESE. The console shipped with only 刷新 / 对齐到当前目标 / 写 goal.md —
+    // no way to bring a goal into existence. So the ONE route to starting a goal was DSH's
+    // built-in `create_goal` tool, and a user watching the chat reasonably concluded the
+    // console's 目标中心 was decorative. A control plane that cannot create the thing it
+    // controls is not a control plane.
+    //
+    // These call the goal service's own public API — `ctx.get('goals')` → `create/edit/pause/
+    // resume/complete/clear` — so DSH keeps every bit of the authority it already had: the
+    // phase machine, the revision check, the durable event. Nothing here re-implements it, and
+    // `ref` is always the revision the page last read, so a stale tab gets GOAL_STALE_REVISION
+    // rather than clobbering a newer state.
+    if (op === 'goalCreate' || op === 'goalPause' || op === 'goalResume' || op === 'goalComplete' || op === 'goalClear') {
+      const target = resolveTarget(ctx, body.sessionId)
+      const sessionId = target.sessionId
+      if (sessionId === null) {
+        sendJson(res, 422, { error: '没有可用的会话', snapshot: snapshotOf() })
+        return
+      }
+      if (target.agent === undefined) {
+        // The goal service works on a LIVE agent, not an id — a session that is not loaded in
+        // this process has no goal to act on, and saying so beats a confusing NOT_FOUND.
+        sendJson(res, 422, { error: '这个会话不在当前进程里（DSH 重启后需要先打开它），无法操作它的目标', snapshot: snapshotOf() })
+        return
+      }
+      const goals = service(ctx, 'goals')
+      if (goals === undefined) {
+        sendJson(res, 422, { error: '这个部署没有挂载 goal 服务（@deepseek-ai/dsh-goal）', snapshot: snapshotOf() })
+        return
+      }
+
+      const payload = typeof body.payload === 'object' && body.payload !== null ? body.payload : {}
+      const applied = applyGoalLifecycle(goals, target.agent, target.goal, op, payload)
+      if (!applied.ok) {
+        sendJson(res, applied.status, { error: applied.error, code: applied.code, snapshot: snapshotOf() })
+        return
+      }
+      sendJson(res, 200, { ...snapshotOf(), applied: { op, goal: applied.goal } })
+      return
+    }
+
     // ---- clear the whole plan (destructive; the page confirms first)
     if (op === 'clear') {
       const target = resolveTarget(ctx, body.sessionId)
@@ -482,6 +524,71 @@ async function handlePost(ctx, req, res, deps) {
     sendJson(res, 200, { ...snapshotOf(), applied: { op, created: result.created ?? null } })
   } catch (error) {
     sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) })
+  }
+}
+
+/**
+ * Drive one runtime-goal lifecycle op through the goal service's own API.
+ *
+ * Deliberately a thin translation layer and nothing more. Every rule that matters — which
+ * phase may transition to which, that a stale `ref` is refused, that a completed goal must be
+ * cleared rather than resumed — belongs to `@deepseek-ai/dsh-goal` and stays there. This
+ * function chooses which method to call and turns a thrown `GoalError` into an HTTP-ish
+ * result; if it ever grew a phase check of its own, that would be a second copy of the state
+ * machine and the two would drift.
+ *
+ * `ref` is read from the LIVE goal rather than from the request body on purpose: the page and
+ * the service are in the same process, so the freshest revision is available here, and a tab
+ * that has been open for an hour cannot roll the goal back by posting a stale one.
+ *
+ * @param {object} goals - the goal service (`ctx.get('goals')`).
+ * @param {object} agent - the owning live agent.
+ * @param {object|null} current - the live goal view, when one exists.
+ * @param {string} op - one of the `goal*` lifecycle ops.
+ * @param {object} payload - `{objective?, maxGoalRounds?}` for create/edit.
+ * @returns {{ok: true, goal: object|null} | {ok: false, status: number, code: string, error: string}}
+ */
+export function applyGoalLifecycle(goals, agent, current, op, payload) {
+  const ref = current === null || current === undefined ? null : { id: current.id, revision: current.revision }
+  const text = (value) => (typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined)
+
+  try {
+    switch (op) {
+      case 'goalCreate': {
+        const objective = text(payload.objective)
+        if (objective === undefined) {
+          return { ok: false, status: 422, code: 'GOAL_INVALID_STATE', error: '建目标需要 payload.objective：没有目标就无从判断什么算完成。' }
+        }
+        // A COMPLETED goal may be replaced; any other live phase must be cleared or resumed
+        // first, and the service enforces that itself (GOAL_ALREADY_EXISTS). Passing the round
+        // cap through only when it is a real number keeps the service's own default in play.
+        const request = { objective }
+        if (Number.isSafeInteger(payload.maxGoalRounds) && payload.maxGoalRounds > 0) {
+          request.maxGoalRounds = payload.maxGoalRounds
+        }
+        return { ok: true, goal: goals.create(agent, request) }
+      }
+      case 'goalPause':
+        return { ok: true, goal: goals.pause(agent, ref) }
+      case 'goalResume':
+        return { ok: true, goal: goals.resume(agent, ref) }
+      case 'goalComplete':
+        return { ok: true, goal: goals.complete(agent, ref) }
+      case 'goalClear':
+        // `clear` returns a tombstone ref, not a view — there is no goal afterwards.
+        return { ok: true, goal: { cleared: goals.clear(agent, ref) } }
+      default:
+        return { ok: false, status: 400, code: 'GOAL_INVALID_STATE', error: `未知的目标操作 ${JSON.stringify(op)}` }
+    }
+  } catch (error) {
+    // A GoalError carries a stable code the page branches on; anything else is a real bug and
+    // is reported as a 500 so it is not mistaken for a normal refusal.
+    const code = typeof error?.code === 'string' ? error.code : null
+    const message = error instanceof Error ? error.message : String(error)
+    if (code === null) return { ok: false, status: 500, code: 'GOAL_INVALID_STATE', error: message }
+    // A stale tab is 409 so the page reloads rather than retrying the same losing write.
+    const status = code === 'GOAL_STALE_REVISION' ? 409 : 422
+    return { ok: false, status, code, error: message }
   }
 }
 

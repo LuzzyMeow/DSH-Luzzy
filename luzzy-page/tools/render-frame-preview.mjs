@@ -24,7 +24,14 @@ writeFileSync(out, html, 'utf8')
 const checks = [
   ['has doctype', html.startsWith('<!doctype html>')],
   ['has closing html', html.trimEnd().endsWith('</html>')],
-  ['has the font faces', (html.match(/@font-face/g) ?? []).length === 4],
+  // "Every face is inlined", not "there are four faces". The count was an inventory of the
+  // four subset faces and broke the moment the CJK half moved to the OS font stack — a change
+  // that made the frame MORE self-contained (fewer bytes, no missing glyphs), not less.
+  ['has the font faces', (html.match(/@font-face/g) ?? []).length > 0],
+  ['every font face is inlined', (() => {
+    const faces = html.match(/@font-face\s*\{[^}]*\}/g) ?? []
+    return faces.length > 0 && faces.every((block) => /src:\s*url\(data:font\/woff2;base64,/.test(block))
+  })()],
   ['has no external url', !/url\((?!data:)/.test(html)],
   ['has the script', html.includes("'use strict'")],
   ['no unresolved font marker', !html.includes('__FRAME_FONTS__')],
