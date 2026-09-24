@@ -412,9 +412,13 @@ async function handlePost(ctx, req, res, deps) {
     //
     // These call the goal service's own public API — `ctx.get('goals')` → `create/edit/pause/
     // resume/complete/clear` — so DSH keeps every bit of the authority it already had: the
-    // phase machine, the revision check, the durable event. Nothing here re-implements it, and
-    // `ref` is always the revision the page last read, so a stale tab gets GOAL_STALE_REVISION
-    // rather than clobbering a newer state.
+    // phase machine, the revision check, the durable event. Nothing here re-implements it.
+    //
+    // The `ref` handed to the service comes from `resolveTarget`, which reads the LIVE goal
+    // through `liveGoalFor`. It is deliberately NOT taken from the request body: reading it
+    // here means an hour-old tab cannot post a stale revision and roll the goal back. A body
+    // that disagrees with the process is simply outvoted, and the write either applies at the
+    // current revision or the service refuses it.
     if (op === 'goalCreate' || op === 'goalPause' || op === 'goalResume' || op === 'goalComplete' || op === 'goalClear') {
       const target = resolveTarget(ctx, body.sessionId)
       const sessionId = target.sessionId
