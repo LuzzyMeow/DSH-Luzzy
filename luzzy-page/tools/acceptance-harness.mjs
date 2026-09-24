@@ -314,4 +314,15 @@ export const IN_FRAME = `(fn) => {
   return fn(f.contentDocument, f.contentWindow);
 }`
 
+/**
+ * The same helper for when the frame document IS the page.
+ *
+ * `render-frame-with-data.mjs` writes the frame's own HTML to a temp file, so pointing a browser
+ * at that file gives a document with no `#frame` iframe inside it. Measuring THAT is the point:
+ * it is the exact page the screenshots come from, byte for byte. `IN_FRAME` would return
+ * `{error: 'no frame document'}` there, which reads as "the page is broken" rather than "you
+ * aimed the loader at the wrong document".
+ */
+export const AS_DOCUMENT = `(fn) => fn(document, window)`
+
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))

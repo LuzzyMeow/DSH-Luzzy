@@ -36,7 +36,24 @@ const code = srcDoc
 const routerTable = srcDoc.slice(srcDoc.indexOf('const TABS = ['), srcDoc.indexOf('const TABS = [') + 1200)
 const tabs = [...routerTable.matchAll(/id: '(\w+)', label: '([^']+)'/g)].map((m) => m[2])
 check('all tab labels are Chinese', tabs.every((label) => /[\u4e00-\u9fff]/.test(label)), tabs.join(', '))
-check('the tab set is the delivered one', tabs.join(',') === '总览,目标中心,执行状态,Agent 配置,系统信息,预设,插件说明', tabs.join(','))
+
+// The tab set is the delivered one — asserted as the CURRENT set, not the set from three redesigns
+// ago. This read '总览,目标中心,执行状态,Agent 配置,系统信息,预设,插件说明' and had been failing
+// for a while before this pass: 总览 was removed by an earlier request and the two folded sections
+// (执行状态 / Agent 配置) stopped being tabs when they were merged into 目标中心.
+//
+// The property worth guarding is that the tab set is EXACTLY the declared list — no orphan tab
+// left rendering dead content, no tab silently dropped. Keeping the expected value beside the
+// router is what makes drift visible; freezing it forever is what makes the check useless.
+const EXPECTED_TABS = ['目标中心', '系统信息', '预设', '插件说明']
+check('the tab set is the delivered one', tabs.join(',') === EXPECTED_TABS.join(','),
+  `${tabs.join(',')} (expected ${EXPECTED_TABS.join(',')})`)
+// …and every declared tab must have a renderer, or it is a tab that opens nothing.
+const orphanTabs = tabs.filter((label) => {
+  const id = [...routerTable.matchAll(/id: '(\w+)', label: '([^']+)'/g)].find((m) => m[2] === label)?.[1]
+  return id !== undefined && !new RegExp(`LZ\\.[A-Za-z]+\\.render\\(`).test(srcDoc.slice(srcDoc.indexOf(`id: '${id}'`), srcDoc.indexOf(`id: '${id}'`) + 200))
+})
+check('every tab has a renderer', orphanTabs.length === 0, orphanTabs.join(', '))
 // The toolbar labels are user-visible too, and must also be Chinese.
 const toolbarLabels = [...srcDoc.matchAll(/label: '([^']+)', icon:/g)].map((m) => m[1])
 check(
@@ -54,7 +71,24 @@ const NOT_USER_COPY = [
   /^The operation was aborted\.?$/,                       // the DOMException message compared against
   /^[a-z]+(?: [a-z]+)*$/,                                 // lowercase words: internal keys, not sentences
 ]
-const latinSentences = [...code.matchAll(/'([A-Za-z][A-Za-z ,.'-]{18,})'/g)]
+
+// The single-quote-to-single-quote match must not CROSS a quote boundary.
+//
+// The pattern used to be /'([A-Za-z][A-Za-z ,.'-]{18,})'/g, and its character class contains both
+// the single quote and the comma — so a match could OPEN on one string literal and CLOSE on a later
+// one, without ever having to close on the quote it opened. Every hit it produced was of that shape:
+//
+//     ["slots', 'locale', 'sessions', 'workspaces', 'agents"]
+//     ["Inter Variable', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB"]
+//
+// Those are a service-name array and the font stack — code and a CSS value, not copy. The check was
+// therefore red for reasons no user could ever see, while a REAL sentence would have been
+// indistinguishable from them.
+//
+// The fix is to exclude the quote from the body of the match, so it must run from an opening quote
+// to the NEXT one. It stays deliberately loose about what a sentence is — that judgement is the
+// allowlist's job — but it no longer invents sentences out of adjacent string literals.
+const latinSentences = [...code.matchAll(/'([A-Za-z][A-Za-z ,.-]{18,})'/g)]
   .map((m) => m[1].trim())
   .filter((text) => text.split(/\s+/).length >= 3)
   .filter((text) => !NOT_USER_COPY.some((pattern) => pattern.test(text)))
@@ -128,17 +162,45 @@ const spacings = [...tokens.matchAll(/--lz-space-[a-z]+:\s*(\d+)px/g)].map((m) =
 check('spacing is the 4px ladder', spacings.every((value) => value % 4 === 0), spacings.join(', '))
 check('spacing covers the six required steps', [4, 8, 12, 16, 24, 32].every((step) => spacings.includes(step)), spacings.join(', '))
 
-// Type scale: 12/14/16/20/24 and nothing between.
+// Type scale: the six steps the reference actually ships, and nothing between them.
+//
+// This used to be the frozen list [12, 14, 16, 20, 24] — the OLD scale. When the console moved to
+// the reference's own scale, the values changed and this went red while the design was correct: a
+// hardcoded inventory is not a property, it is a snapshot of one Tuesday.
+//
+// The property that DOES matter, and that the old list was standing in for, is that the steps are
+// DISTINCT and ORDERED. A duplicated step is a real defect: `--lz-font-xs: 13px` next to
+// `--lz-font-sm: 13px` makes "which one should this be" an arbitrary choice, and I shipped exactly
+// that in the first pass. So the assertion is uniqueness + ascending order, plus the exact set the
+// reference defines — read from ITS bundle, not invented.
 const typeSizes = [...tokens.matchAll(/--lz-font-[a-z0-9]+:\s*(\d+)px/g)].map((m) => Number(m[1]))
-check('the type scale has no off-scale sizes', typeSizes.every((size) => [12, 14, 16, 20, 24].includes(size)), typeSizes.join(', '))
+const REFERENCE_SCALE = [13, 14, 16, 18, 24, 30]
+check(
+  'the type scale is the reference\'s own six steps',
+  typeSizes.slice().sort((a, b) => a - b).join(',') === REFERENCE_SCALE.join(','),
+  `${typeSizes.join(', ')} (expected ${REFERENCE_SCALE.join(', ')})`,
+)
+check(
+  'and every step is distinct — no two tokens sharing a size',
+  new Set(typeSizes).size === typeSizes.length,
+  typeSizes.join(', '),
+)
 
-// Radius: 4/6/8/12, plus the fully-round pill (999) that DESIGN.md reserves for pills, avatars
-// and circular icon buttons. Two scales, both intentional — the assertion lists them both rather
-// than rejecting a value the reference system explicitly asks for.
+// Radius: 4/6/8/12/16, plus the fully-round pill (999) that DESIGN.md reserves for pills, avatars
+// and circular icon buttons. Two scales, both intentional.
+//
+// Same lesson as the type scale: this was the frozen list [4, 6, 8, 12, 999] and went red when the
+// card radius moved to the reference's 16px `rounded-2xl` step. 16 is not drift — it is the step
+// the reference uses for exactly this surface.
 const radii = [...tokens.matchAll(/--lz-radius[a-z-]*:\s*(\d+)px/g)].map((m) => Number(m[1]))
 check(
   'the radius scale is the documented set',
-  radii.every((value) => [4, 6, 8, 12, 999].includes(value)),
+  radii.every((value) => [4, 6, 8, 12, 16, 999].includes(value)),
+  radii.join(', '),
+)
+check(
+  'and every radius step is distinct',
+  new Set(radii).size === radii.length,
   radii.join(', '),
 )
 check('the fully-round radius is reserved for pills', tokens.includes('--lz-radius-pill: 999px'))

@@ -548,6 +548,13 @@
     }
 
     const label = '执行链：目标分支 ' + chain.goalLabel + '；技能分支 ' + chain.skillLabel + '；工具' + tool.text
+    // 时间戳放进 SVG 里，不再单独一行。
+    //
+    // 它原来是一个 <p> 挂在图下面，实测那一行要 ~30px 外加 4px 间距 —— 而这一整条状态行占的
+    // 是**卡片网格的高度**：1630×984 上，修好执行链被裁的那个 bug 之后这一行要 121px，网格
+    // 因此从 751px 掉到 598px，六张卡每张少了一百多像素可见。把时间挪进图里（图的右下角本来
+    // 就是空的）省下 34px，是对两件事都不损的做法：图和判断时间照旧都看得见。
+    const stamp = chain.at === '' ? '本轮还没判断' : '判断于 ' + chain.at
     const svg =
       '<svg class="chainSvg" viewBox="0 0 720 76" width="100%" height="76" role="img" ' +
       'aria-label="' + esc(label) + '">' +
@@ -556,13 +563,11 @@
       node(254, '②', '技能分支', tone(chain.skillCheck), short(chain.skillLabel), chain.skillLabel) +
       arrow(466) +
       node(508, '③', '工具放行', tool.state, tool.text, '按 host 的门序：状态链 → 目标 → 技能') +
+      '<text class="chainStamp" x="720" y="72" text-anchor="end">' + esc(stamp) + '</text>' +
       '</svg>'
 
     return '<div class="driftLine" data-chain="' + (chain.judged ? 'judged' : 'pending') + '">' +
       svg +
-      '<p class="rowSub" style="margin:var(--lz-space-xxs) 0 0">' +
-      (chain.at === '' ? '本轮还没判断' : '判断于 ' + esc(chain.at)) +
-      '</p>' +
       '</div>'
   }
 

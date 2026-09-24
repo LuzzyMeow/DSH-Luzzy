@@ -99,14 +99,25 @@
 
 /* 卡片副标题：一句话说明这张卡在回答什么。
  *
- * 用 --lz-font-base（15px）而不是 --lz-font-sm。实测这个选择器是整页里最大的一块小字：
- * 280 字，占全文 79.5% —— 而且它是**整句的说明性散文**（「这几项没齐之前，Agent 的工具调用
- * 会被拒——不是故障，是启动协议…」），不是标签。把一段给人读的话排成 13px，就是「观感差」
- * 最直接的来源。标签（.metricLabel / .kvLabel / .railBrand）留在 13px，它们本来就该安静。 */
+ * 用 --lz-font-sm（14px），不是 --lz-font-base。
+ *
+ * 这一格走过两趟弯路，**两个方向都错**，所以把判据写下来：
+ *
+ *   1. 原来是 12px，实测它是全页最大的一块小字（280 字，占 79.5%）——「整页由小字主导」在
+ *      那时候是真的，所以把它升到了 16px。
+ *   2. 升到 16px 之后，**真尺寸渲染**（1630×984）上出了新问题：「还缺什么」那张卡的副标题
+ *      一个人吃掉 179px，而卡片总共只有 288px —— 卡里的正文只剩 **2px**，也就是一行都读不到。
+ *
+ * 判据在参考里：它给卡片说明性小字用的是 `text-xs`（14px，配 `text-ink-muted`），不是
+ * `text-sm`（16px）。16px 是它给**正文**的档，用在卡片说明上会让说明和正文一样重，而说明
+ * 本来就该比正文轻一档。
+ *
+ * 14px 同时满足两边：比 12px 大两档，又比正文轻一档。上一版把两件事混成一件 ——
+ * 「字要大一点」和「这一格该多大」不是同一个问题，混起来就会从一个极端荡到另一个极端。 */
 .cardSub {
   margin: calc(var(--lz-space-xs) * -1) 0 var(--lz-space-sm);
-  font-size: var(--lz-font-base);
-  line-height: var(--lz-line-height);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
   color: var(--lz-text-secondary);
 }
 
@@ -172,6 +183,12 @@
 .chainDot { fill: var(--lz-text-quaternary); }
 .chainLabel { fill: var(--lz-text); font-size: var(--lz-font-sm); font-weight: 600; }
 .chainValue { fill: var(--lz-text-secondary); font-size: var(--lz-font-sm); }
+/* 判断时间：从图上方的独立一行收进图的右下角。
+ *
+ * 省下的是**卡片网格的高度** —— 那一行要 34px，而状态行占多少，卡片网格就少多少。它在这张
+ * 图里本来就有位置（右下方是空的），所以这不是把信息藏起来，是把它放到不占新地方的位置。
+ * 用最轻的一档：它是时间戳，读者扫一眼就走。 */
+.chainStamp { fill: var(--lz-text-tertiary); font-size: var(--lz-font-xs); }
 .chainEdge { stroke: var(--lz-border); stroke-width: 1.5; }
 .chainHead { fill: var(--lz-border); }
 
@@ -248,7 +265,7 @@
 }
 
 .metricValue {
-  font-size: var(--lz-font-xl);
+  font-size: var(--lz-font-2xl);
   font-weight: var(--lz-weight-strong);
   color: var(--lz-text);
   font-variant-numeric: tabular-nums;
@@ -476,13 +493,16 @@ details.treeBranch[open] > summary.treeRow .treeArrow { transform: rotate(90deg)
 
 .rowText { margin: 0; color: var(--lz-text); overflow-wrap: anywhere; }
 
-/* 行内副文本。同 .cardSub：它承载的是**句子**（「还没有写。这一格要一段话 —— 这个目标在
- * 做什么。」），不是标签，所以走正文字号。实测它是第二块小字（100 字），和 .cardSub 一起
- * 构成「整页由小字主导」的全部原因。 */
+/* 行内副文本。与 .cardSub 同一条判据：这是**说明**，不是正文，所以走 14px 那一档。
+ *
+ * 上一版两处都升到了 16px，理由写在 .cardSub 顶上 —— 结论是那个理由只对了一半：字要变大是
+ * 对的，但「这一格该多大」要按参考给它的角色定。参考把说明性文字放在 text-xs（14px）配
+ * muted 色，正文才用 16px。实测代价：在 1630×984 上，16px 的说明会把一张 288px 的卡片挤到
+ * 正文只剩 2px。 */
 .rowSub {
   margin: var(--lz-space-xxs) 0 0;
-  font-size: var(--lz-font-base);
-  line-height: var(--lz-line-height);
+  font-size: var(--lz-font-sm);
+  line-height: var(--lz-line-height-sm);
   color: var(--lz-text-secondary);
   overflow-wrap: anywhere;
 }
@@ -866,8 +886,10 @@ textarea.dialogInput {
   font-weight: var(--lz-weight-strong);
 }
 
-.prose h1 { font-size: var(--lz-font-2xl); }
-.prose h2 { font-size: var(--lz-font-xl); }
+/* 标题梯度：30 / 24 / 18，三档各自降一档。去掉 20px 之后 h1 与 h2 本来会同为 24px —— 那会
+ * 让「这是大标题还是小标题」变得看不出来，所以 h1 升到 3xl，梯度仍然是三档。 */
+.prose h1 { font-size: var(--lz-font-3xl); }
+.prose h2 { font-size: var(--lz-font-2xl); }
 .prose h3 { font-size: var(--lz-font-lg); }
 .prose h4, .prose h5, .prose h6 { font-size: var(--lz-font-base); }
 .prose > :first-child { margin-top: 0; }
@@ -1175,7 +1197,7 @@ textarea.dialogInput {
  * 视觉变化。等它们被新页面取代时再逐条迁移。
  */
 
-.nextList { margin: 0; padding-left: 24px; font-size: 14px; line-height: 1.7; }
+.nextList { margin: 0; padding-left: 24px; font-size: var(--lz-font-sm); line-height: 1.7; }
 
 .nextList li { overflow-wrap: anywhere; }
 
@@ -1191,7 +1213,7 @@ textarea.dialogInput {
 
 .chartDot { transition: none; }
 
-.chartTipTitle { font-weight: 700; font-size: 12px; white-space: nowrap; }
+.chartTipTitle { font-weight: 700; font-size: var(--lz-font-xs); white-space: nowrap; }
 
 .chartTipRows { display: flex; flex-direction: column; gap: 4px; }
 
@@ -1207,9 +1229,9 @@ textarea.dialogInput {
 
 .donutCenter { position: absolute; display: flex; flex-direction: column; align-items: center; gap: 2px; pointer-events: none; }
 
-.donutTotal { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.donutTotal { font-size: var(--lz-font-base); font-weight: 700; font-variant-numeric: tabular-nums; }
 
-.donutCaption { color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; }
+.donutCaption { color: var(--dsw-alias-label-tertiary, #999); font-size: var(--lz-font-xs); }
 
 .modelList { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 
@@ -1217,11 +1239,17 @@ textarea.dialogInput {
 
 .markdown h1, .markdown h2, .markdown h3 { margin: 1.2em 0 0.5em; line-height: 1.35; font-weight: 700; }
 
-.markdown h1 { font-size: 24px; margin-top: 0; }
+/* Markdown 正文的字号走 token。
+ *
+ * 这一节原来全是字面量（24 / 20 / 16 / 14 / 12px），绕过了 tokens.css —— 于是改动字阶对
+ * 它毫无作用，而它是页面上正文最多的地方之一。更糟的是它有一档 12px，在现在的字阶里**比
+ * 最小的一档还小**：`audit-acceptance.mjs` 的「字阶没有刻度外尺寸」就是在数这些。
+ * 同一梯度现在与 `.prose` 一致：30 / 24 / 18。 */
+.markdown h1 { font-size: var(--lz-font-3xl); margin-top: 0; }
 
-.markdown h2 { font-size: 20px; }
+.markdown h2 { font-size: var(--lz-font-2xl); }
 
-.markdown h3 { font-size: 16px; }
+.markdown h3 { font-size: var(--lz-font-lg); }
 
 .markdown p { margin: 0.6em 0; }
 
@@ -1241,9 +1269,9 @@ textarea.dialogInput {
   background: var(--dsw-alias-markdown-code-block, rgba(0,0,0,0.03));
 }
 
-.markdown pre code { padding: 0; background: none; font-size: 12px; line-height: 1.6; }
+.markdown pre code { padding: 0; background: none; font-size: var(--lz-font-xs); line-height: 1.6; }
 
-.markdown table { border-collapse: collapse; margin: 0.8em 0; width: 100%; font-size: 14px; }
+.markdown table { border-collapse: collapse; margin: 0.8em 0; width: 100%; font-size: var(--lz-font-sm); }
 
 .markdown th, .markdown td {
   border: 0.5px solid var(--dsw-alias-border-l2, #eee); padding: 8px 12px; text-align: left;
@@ -1279,7 +1307,7 @@ textarea.dialogInput {
 .rosterGroupHead {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 6px; border-radius: 6px;
-  color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; font-weight: 700;
+  color: var(--dsw-alias-label-tertiary, #999); font-size: var(--lz-font-xs); font-weight: 700;
 }
 
 .rosterGroupHead:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04)); }
@@ -1320,7 +1348,7 @@ textarea.dialogInput {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px; border: 0.5px solid transparent; border-radius: 8px;
   background: transparent; color: var(--dsw-alias-label-secondary, #666);
-  font: inherit; font-size: 14px; text-align: left; cursor: pointer;
+  font: inherit; font-size: var(--lz-font-sm); text-align: left; cursor: pointer;
 }
 .rosterItem:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.04)); }
 .rosterItem[aria-selected='true'] {
@@ -1336,7 +1364,7 @@ textarea.dialogInput {
 .rosterItemActive {
   flex: none; padding: 1px 6px; border-radius: 999px;
   background: color-mix(in srgb, var(--dsw-static-deepseek-500, #4d6bfe) 22%, transparent);
-  color: var(--dsw-static-deepseek-500, #4d6bfe); font-size: 12px; font-weight: 700;
+  color: var(--dsw-static-deepseek-500, #4d6bfe); font-size: var(--lz-font-xs); font-weight: 700;
 }
 
 .rosterItemHandle {
@@ -1355,12 +1383,12 @@ textarea.dialogInput {
 
 .field { display: flex; flex-direction: column; gap: 8px; }
 
-.fieldLabel { color: var(--dsw-alias-label-tertiary, #999); font-size: 12px; }
+.fieldLabel { color: var(--dsw-alias-label-tertiary, #999); font-size: var(--lz-font-xs); }
 
 .input, .textarea, .select {
   width: 100%; padding: 8px 12px; border: 0.5px solid var(--dsw-alias-border-l4, #ddd);
   border-radius: 8px; background: var(--dsw-alias-bg-layer-1, #fff);
-  color: var(--dsw-alias-label-primary, #080808); font: inherit; font-size: 14px;
+  color: var(--dsw-alias-label-primary, #080808); font: inherit; font-size: var(--lz-font-sm);
 }
 
 .input:focus-visible, .textarea:focus-visible, .select:focus-visible {
@@ -1398,7 +1426,7 @@ textarea.dialogInput {
   min-width: 28px; height: 28px; padding: 0 4px;
   border: none; border-radius: 6px; background: transparent;
   color: var(--dsw-alias-label-secondary, #666);
-  font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.01em;
+  font: inherit; font-size: var(--lz-font-xs); font-weight: 700; letter-spacing: 0.01em;
   cursor: pointer;
   transition: background-color 160ms cubic-bezier(0.23,1,0.32,1), color 160ms cubic-bezier(0.23,1,0.32,1);
 }
@@ -1458,7 +1486,7 @@ textarea.dialogInput {
      occupying a line of its own. */
   position: relative;
   font-family: var(--lz-font-sans);
-  font-size: 14px; line-height: 1.72;
+  font-size: var(--lz-font-sm); line-height: 1.72;
   color: var(--dsw-alias-label-primary, #080808);
 }
 
@@ -1506,7 +1534,7 @@ textarea.mdLayer {
   border: none; resize: none; outline: none;
   background: transparent;
   color: var(--dsw-alias-label-primary, #080808);
-  font-family: ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.6;
+  font-family: ui-monospace, Consolas, monospace; font-size: var(--lz-font-xs); line-height: 1.6;
   white-space: pre-wrap; overflow-wrap: break-word;
 }
 
@@ -1520,7 +1548,7 @@ textarea.mdLayer:focus-visible { outline: 2px solid var(--dsw-static-deepseek-50
   padding: 4px 8px;
   border-top: 0.5px solid var(--dsw-alias-border-l2, #eee);
   background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.02));
-  font-size: 12px; color: var(--dsw-alias-label-tertiary, #999);
+  font-size: var(--lz-font-xs); color: var(--dsw-alias-label-tertiary, #999);
 }
 
 .mdFootCount { font-variant-numeric: tabular-nums; }
@@ -1533,7 +1561,7 @@ textarea.mdLayer:focus-visible { outline: 2px solid var(--dsw-static-deepseek-50
   border: 0.5px solid var(--dsw-alias-border-l4, #ddd); border-radius: 6px;
   background: var(--dsw-alias-bg-layer-1, #fff);
   color: var(--dsw-alias-label-secondary, #666);
-  font: inherit; font-size: 12px; cursor: pointer;
+  font: inherit; font-size: var(--lz-font-xs); cursor: pointer;
   transition: color 160ms cubic-bezier(0.23,1,0.32,1);
 }
 
@@ -1565,7 +1593,7 @@ textarea.mdLayer:focus-visible { outline: 2px solid var(--dsw-static-deepseek-50
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 8px; border: none; border-radius: 6px; background: transparent;
   color: var(--dsw-alias-label-primary, #080808);
-  font: inherit; font-size: 12px; text-align: left; cursor: pointer;
+  font: inherit; font-size: var(--lz-font-xs); text-align: left; cursor: pointer;
 }
 
 .mdMenuItem:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,0.05)); }
@@ -1667,10 +1695,10 @@ textarea.mdLayer:focus-visible { outline: 2px solid var(--dsw-static-deepseek-50
 .stateBadge {
   display: inline-flex; align-items: center; height: 32px; padding: 0 12px;
   border-radius: 8px; background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.03));
-  color: var(--dsw-alias-label-tertiary, #999); font-size: 14px;
+  color: var(--dsw-alias-label-tertiary, #999); font-size: var(--lz-font-sm);
 }
 
-.saveState { font-size: 12px; color: var(--dsw-alias-label-tertiary, #999); }
+.saveState { font-size: var(--lz-font-xs); color: var(--dsw-alias-label-tertiary, #999); }
 
 .saveState[data-kind='dirty'] { color: var(--dsw-alias-state-warn-primary, #a60); }
 
@@ -1682,5 +1710,5 @@ textarea.mdLayer:focus-visible { outline: 2px solid var(--dsw-static-deepseek-50
 
 .sessionPreset {
   padding: 2px 8px; border-radius: 999px; font-family: ui-monospace, Consolas, monospace;
-  font-size: 12px; background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
+  font-size: var(--lz-font-xs); background: var(--dsw-alias-bg-layer-2, rgba(0,0,0,0.04));
 }

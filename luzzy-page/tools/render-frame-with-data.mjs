@@ -44,6 +44,9 @@ if (!TABS.includes(tab)) {
 const windowName = argValue('--window', 'day')
 const mode = argValue('--mode', 'line')
 const dark = args.includes('--dark')
+// `--drifted` renders the page with the runtime goal moved on and the plan NOT re-based, i.e. the
+// state that carries the 「对齐到当前目标」 control. See the note in buildGoalFixture.
+const drifted = args.includes('--drifted')
 const out = argValue('--out', join(tmpdir(), `luzzy-frame-${tab}${dark ? '-dark' : ''}.html`))
 const shot = argValue('--shot', null)
 
@@ -105,7 +108,7 @@ const presetSnapshot = {
 // drift report, the artifact state and the capabilities. It is deliberately a goal with work
 // LEFT — a pending criterion, an open task, one open blocker and one pending proposal — so
 // the screenshot shows the states that matter rather than an all-green page.
-function buildGoalFixture() {
+function buildGoalFixture(drifted = false) {
   let delivery = goalDomain.emptyDelivery('session-preview-1')
   const at = 1_760_000_000_000
   const steps = [
@@ -167,11 +170,23 @@ function buildGoalFixture() {
     id: 'goal-preview-1', revision: 7, objective: '把 Settings 页改造成新的 Dashboard，并接入 /api/tasks',
     phase: 'active', activation: 'armed', roundsStarted: 3, maxGoalRounds: 256,
   }
-  const artifactText = goalDomain.renderGoalMarkdown(delivery, goal, { generatedAt: at, artifactPath: join('.agent', 'goal.md') })
+  // `--drifted` moves the runtime goal on without re-basing the plan, so the page renders its
+  // DRIFTED state: the warning line, the 原文/现文 pair, and — the part that matters — the
+  // 「对齐到当前目标」 button.
+  //
+  // That state needs its own fixture because it is the only one carrying a control, and a page
+  // whose button is clipped out of view is indistinguishable from a page with no button at all.
+  // I found exactly that: `max-height: 3.6em` cut the button off the bottom of a 58px strip, and
+  // no screenshot in this repo had ever rendered the drifted state to show it.
+  const runtimeGoal = drifted
+    ? { ...goal, revision: 9, objective: '把 Settings 页改造成目标看板，并接入 /api/tasks（用户改过口径）' }
+    : goal
+  const artifactText = goalDomain.renderGoalMarkdown(delivery, runtimeGoal, { generatedAt: at, artifactPath: join('.agent', 'goal.md') })
   return {
     version: 1,
     sessionId: 'session-preview-1',
-    goal,
+    // The RUNTIME goal, not the one the plan was written against — that difference IS the drift.
+    goal: runtimeGoal,
     goalState: 'ok',
     candidates: [],
     capabilities: { goalService: true, agents: true, sessions: true, tools: true, artifact: true },
@@ -180,9 +195,9 @@ function buildGoalFixture() {
     toolName: 'goal_delivery',
     delivery,
     warnings: ['任务 T-004 有 1 条依赖指向不存在的任务，已丢弃'],
-    summary: goalDomain.summarize(delivery, goal),
-    integrity: goalDomain.integrity(delivery, goal),
-    drift: goalDomain.detectDrift(delivery, goal),
+    summary: goalDomain.summarize(delivery, runtimeGoal),
+    integrity: goalDomain.integrity(delivery, runtimeGoal),
+    drift: goalDomain.detectDrift(delivery, runtimeGoal),
     artifact: {
       enabled: true, cwd: 'D:\\.NekoTool\\LuzzyRP', exists: true,
       path: 'D:\\\\.NekoTool\\\\LuzzyRP\\\\.agent\\\\goal.md', bytes: Buffer.byteLength(artifactText, 'utf8'),
@@ -193,7 +208,7 @@ function buildGoalFixture() {
   }
 }
 
-const goalSnapshot = buildGoalFixture()
+const goalSnapshot = buildGoalFixture(drifted)
 
 // Inject: a fetch shim before the frame script, and start on the requested tab.
 //
@@ -341,10 +356,18 @@ console.log(`windows: ${usage.windows ? Object.keys(usage.windows).join(', ') : 
 console.log(`wrote: ${out} (${(withShim.length / 1024).toFixed(0)} KB)`)
 
 if (shot !== null) {
-  // Sized to the content. A taller window does not show more — it just pads the image with
-  // dead space that then has to be scrolled past to read the evidence. The retry and
-  // per-output profile live in shoot.mjs; see the notes there for why each is required.
-  const height = tab === 'readme' ? 2400 : 1300
-  if (shoot({ page: out, out: shot, height })) console.log(`shot: ${shot}`)
+  // Size comes from the command line, defaulting to the panel's real geometry.
+  //
+  // This used to be a hardcoded `1300` (and shoot.mjs defaults its width to 1200), so every
+  // screenshot this repo has ever taken was the WRONG SHAPE: the console actually runs at
+  // 1630x984, measured from the diag `viewport` record. A 1200x1300 capture of a 1630x984 panel
+  // is not a smaller version of the truth — it is a different layout, because `.cardGrid`
+  // reflows on width and the whole point of the redesign was how it reads at the real size.
+  //
+  // `readme` overrides the height: it is a long document that legitimately scrolls, so the
+  // capture is deliberately taller than any panel.
+  const width = Number(argValue('--width', 1630))
+  const height = Number(argValue('--height', tab === 'readme' ? 2400 : 984))
+  if (shoot({ page: out, out: shot, width, height })) console.log(`shot: ${shot} (${width}x${height})`)
   else process.exitCode = 1
 }

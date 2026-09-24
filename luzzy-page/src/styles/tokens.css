@@ -149,18 +149,28 @@
    * 这一档是"观感差"最直接的来源，所以把它说清楚。
    *
    * 上一版是 12/14/16/20/24，而**全文由 12px 主导**（31 处引用 --lz-font-sm）——一整页读下来
-   * 满屏小字。thoughtdag 的字阶是 13 / 14.4 / 16 / 18 / 24 / 30，正文落在 **15–16px**。
+   * 满屏小字。
    *
-   * 所以 --lz-font-base 从 14 提到 15，sm 从 12 提到 13，并把原来缺失的 18 与 30 两档补上
-   * （它们对应 thoughtdag 的 text-lg 与 text-3xl，标题层级需要）。
+   * 现在是参考设计**自己的**六档。它是从打包产物里读出来的真值，不是推测：
    *
-   * 一个必须同时改的东西：**行高**。字号大了、行高不变，正文会挤。thoughtdag 的正文行高是
-   * 1.6（它把 text-sm 的 line-height 写成 1.6），不是我们原来的 1.5714。 */
+   *   --text-2xs : .8125rem = 13px      → --lz-font-xs
+   *   --text-xs  : .875rem  = 14px      → --lz-font-sm
+   *   --text-sm  : 1rem     = 16px      → --lz-font-base   ← 它把 Tailwind 的 .875rem 提到了 1rem
+   *   --text-lg  : 1.125rem = 18px      → --lz-font-lg
+   *   --text-2xl : 1.5rem   = 24px      → --lz-font-2xl
+   *   --text-3xl : 1.875rem = 30px      → --lz-font-3xl
+   *
+   * 参考里**根本没有 20px 这一档**（没有 --text-xl，text-xl 在它的 CSS 与 JS 里出现 0 次）。
+   * 我第一版自己加了一个 20px，还留下 xs 与 sm 同为 13px 的重复档 —— 重复档意味着「该用哪个」
+   * 变成任意选择，而多出来的 20px 是参考没有的第七档。两处都在这一版清掉了：
+   * `.metricValue` 与 `.prose h2` 改用 2xl，`.prose h1` 用 3xl。
+   *
+   * 一个必须同时改的东西：**行高**。字号大了、行高不变，正文会挤。参考的正文行高是 1.6
+   * （它把 text-sm 的 line-height 写成 1.6），不是我们原来的 1.5714。 */
   --lz-font-xs: 13px;
-  --lz-font-sm: 13px;
-  --lz-font-base: 15px;
+  --lz-font-sm: 14px;
+  --lz-font-base: 16px;
   --lz-font-lg: 18px;
-  --lz-font-xl: 20px;
   --lz-font-2xl: 24px;
   --lz-font-3xl: 30px;
   --lz-line-height: 1.6;
@@ -170,8 +180,9 @@
   --lz-weight-bold: 700;
 
   /* ---- 圆角 ----
-   * thoughtdag 实际用到的是 8 / 12 / 16 / 999（`rounded-lg` = 8px 是主力，卡片是
-   * `rounded-2xl` = 16px，胶囊 999）。我们把 4/6 留作内部小件（徽标、复选框）。 */
+   * 参考实际用到的是 8 / 12 / 16 / 999（`rounded-lg` = 8px 是主力，卡片是 `rounded-2xl` = 16px，
+   * 胶囊 999）。4 / 6 留作内部小件（徽标、复选框），它们不在参考的刻度上，是本项目自己的
+   * 下两级 —— 一个 16px 的徽标会是圆的，而 8px 对一行 13px 的字太重。 */
   --lz-radius-xs: 4px;
   --lz-radius-sm: 6px;
   --lz-radius: 8px;

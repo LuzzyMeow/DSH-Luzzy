@@ -8,22 +8,56 @@
 // card body own its own overflow.
 //
 // Same reason the sidebar probe exists: 「布局要量不要看」.
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// WHICH FIXTURE THIS MEASURES — and why that turned out to matter
+//
+// `--page shot` (the default) measures the page `render-frame-with-data.mjs` renders, i.e. THE ONE
+// THE SCREENSHOTS SHOW. `--page harness` measures the smaller acceptance-harness fixture instead.
+//
+// The distinction is not cosmetic. Until this option existed, the probe used the harness fixture
+// (4 cards) while every screenshot came from the render tool's own richer fixture (6 cards) — the
+// two are different pages with different content heights, so a geometry assertion could pass here
+// while the page a person actually saw was laid out differently. Measuring a stand-in and calling
+// it the product is the same class of error as reading a stale cache: the instrument is confident
+// and pointed at the wrong thing.
+//
+// `--page shot` works by screenshotting the render tool's own temp HTML — the exact file the
+// screenshots come from — and reading the DOM back out of it via the file:// protocol. It is the
+// same page to the byte.
 
+import { existsSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { loadFrameBuilder } from './frame-source.mjs'
 import { launchEdge, attach, shutdown } from './cdp-driver.mjs'
-import { frameWithStub, writeHostPage, IN_FRAME, sleep } from './acceptance-harness.mjs'
+import { frameWithStub, writeHostPage, IN_FRAME, AS_DOCUMENT, sleep } from './acceptance-harness.mjs'
 
-// 尺寸从命令行来，好按档扫：默认 1100×800（宽档；面板常见的宽度）。
-// 面板真实宽度只有 diag 里的 `viewport` 记录说得清，这个探针量的是「这个尺寸下几何对不对」。
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(name)
-  return i >= 0 && process.argv[i + 1] !== undefined ? Number(process.argv[i + 1]) : fallback
+  return i >= 0 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : fallback
 }
-const WIDTH = arg('--width', 1100)
-const HEIGHT = arg('--height', 800)
+const argNum = (name, fallback) => Number(arg(name, fallback))
+const WIDTH = argNum('--width', 1630)
+const HEIGHT = argNum('--height', 984)
+const PAGE = arg('--page', 'shot')
 
-const { srcDoc } = loadFrameBuilder()
-const hostPath = writeHostPage(frameWithStub('light'), { width: WIDTH, height: HEIGHT, theme: 'light', label: 'card-grid' })
+let hostPath
+if (PAGE === 'shot') {
+  // Render the real page first, exactly as the screenshot tool does, then point the browser at it.
+  execFileSync(process.execPath, [join(import.meta.dirname, 'render-frame-with-data.mjs'), '--tab', 'goal'], {
+    stdio: 'ignore',
+  })
+  hostPath = join(tmpdir(), 'luzzy-frame-goal.html')
+  if (!existsSync(hostPath)) throw new Error(`the render tool did not produce ${hostPath}`)
+  console.log(`measuring the RENDERED page: ${hostPath}`)
+} else {
+  const { srcDoc } = loadFrameBuilder()
+  hostPath = writeHostPage(frameWithStub('light'), { width: WIDTH, height: HEIGHT, theme: 'light', label: 'card-grid' })
+  console.log('measuring the acceptance-harness fixture (--page harness)')
+}
+
 const launcher = await launchEdge({ headless: true, windowSize: { width: WIDTH, height: HEIGHT } })
 const session = await attach({ port: launcher.port })
 const page = await session.openTarget(`file:///${hostPath.replace(/\\/g, '/')}`)
@@ -40,11 +74,17 @@ function check(label, ok, detail = '') {
 }
 
 try {
-  const ok = await page.waitFor('#frame', { timeoutMs: 15000 })
-  if (!ok) throw new Error('the frame never appeared')
+  // Two different documents, two different ways in. When measuring the rendered page the frame
+  // IS the document, so there is no `#frame` to wait for and `IN_FRAME` would report
+  // "no frame document" — which reads as a broken page rather than a mis-aimed loader.
+  const access = PAGE === 'shot' ? AS_DOCUMENT : IN_FRAME
+  if (PAGE !== 'shot') {
+    const ok = await page.waitFor('#frame', { timeoutMs: 15000 })
+    if (!ok) throw new Error('the frame never appeared')
+  }
   await sleep(2500)
 
-  const measure = await page.evaluate(`(${IN_FRAME})((doc, win) => {
+  const measure = await page.evaluate(`(${access})((doc, win) => {
     const sc = doc.querySelector('.scroll');
     const col = doc.querySelector('.column');
     const cs = doc.defaultView.getComputedStyle(col);
@@ -83,6 +123,20 @@ try {
         return g === null ? null : doc.defaultView.getComputedStyle(g).display
       })(),
       cardCount: cards.length,
+      // How many cards sit inside the grid, and how many elements in the column host cards at all.
+      // Note: the children count above is the COLUMN child count, which is a different number once
+      // the shell packs the cards into a grid — see the note at the assertion.
+      //
+      // NO backticks and NO apostrophes in these comments. This whole block is a template literal,
+      // so a backtick ends it early (the reported error points at the line the template STARTS,
+      // nowhere near the mistake), and an apostrophe inside the single-quoted JS below ends a
+      // string. Both are AGENTS.md section 5.6, and I hit the backtick one while writing this very
+      // comment — which is exactly why the warning exists.
+      gridChildren: (() => {
+        const g = doc.querySelector('.cardGrid')
+        return g === null ? 0 : g.querySelectorAll(':scope > .card').length
+      })(),
+      columnCardHosts: [...col.children].filter((el) => el.querySelector('.card') !== null).length,
       cards,
     };
   })`)
@@ -146,20 +200,112 @@ try {
   } else {
     check('the cards are packed into a grid', measure.cardHost === 'grid',
       `.cardGrid display=${measure.cardHost}`)
-    check('and the cards are its direct children', measure.cardCount === measure.children,
-      `${measure.cardCount} cards / ${measure.children} children`)
+    // The cards are the grid's children — not the COLUMN's.
+    //
+    // This used to read `cardCount === measure.children`, where `children` is the count of
+    // `.column`'s direct children. That was true before `packCards()` existed, when every card sat
+    // directly in the column. Once the shell began packing them into a `.cardGrid`, the column's
+    // children became [btnBar, cardGrid, …state lines] while the cards live one level deeper — so
+    // the assertion compared 6 cards against 4 column children and failed on a correct layout.
+    check('every card is a direct child of the grid',
+      measure.cardCount === measure.gridChildren,
+      `${measure.cardCount} cards / ${measure.gridChildren} grid children`)
+    check('and the grid is the column\'s only card host',
+      measure.columnCardHosts === 1,
+      `${measure.columnCardHosts} element(s) in the column contain cards`)
 
     const heights = measure.cards.map((c) => c.h)
     const spread = heights.length === 0 ? 0 : Math.max(...heights) - Math.min(...heights)
     check('the cards are the same height', spread <= 1, `spread=${spread}px across ${heights.length} cards`)
 
+    // READABILITY — the assertion that would have caught the layout I first shipped.
+    //
+    // I picked the column minimum by "mean visible fraction", which chose 6 columns of 212px: the
+    // highest fraction (77%) and completely unreadable, because a 212px card fits about TEN Chinese
+    // characters per line. The fraction was inflated by the layout itself — narrower cards wrap
+    // more, so their content grows and the denominator grows with it.
+    //
+    // This measures characters per line directly, using the card body's own font metrics, so a
+    // layout that trades readability for a prettier ratio fails here. 18 is the floor: below that,
+    // normal Chinese prose wraps mid-phrase (20-40 chars/line is the ordinary range).
+    const perLine = await page.evaluate(`(${access})((doc, win) => {
+      const out = []
+      for (const body of doc.querySelectorAll('.cardGrid > .card .cardBody')) {
+        const cs = win.getComputedStyle(body)
+        const probe = doc.createElement('span')
+        probe.textContent = '目标看板数据接入状态验证'
+        probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font-size:' + cs.fontSize +
+          ';font-family:' + cs.fontFamily + ';font-weight:' + cs.fontWeight
+        body.appendChild(probe)
+        const textW = probe.getBoundingClientRect().width
+        probe.remove()
+        const inner = body.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
+        out.push(textW === 0 ? 0 : Math.floor(inner / (textW / 12)))
+      }
+      return out
+    })`)
+    const worst = perLine.length === 0 ? 0 : Math.min(...perLine)
+    check('every card fits at least 18 characters per line', worst >= 18,
+      `narrowest card fits ${worst} chars/line (all: ${perLine.join(', ')})`)
+
     // 4 — each card body owns its own scrolling.
     check('every card body can scroll its own overflow',
       measure.cards.every((c) => c.bodyOverflow === 'auto'),
       measure.cards.map((c) => c.bodyOverflow).join(','))
-    check('and a card whose content is longer than the card really does scroll',
-      measure.cards.some((c) => c.bodyScroll > c.bodyClient + 1),
-      'no card overflows — the fixture may be too small to prove the scroll works')
+
+    // …and PROVE the scroll actually works, with a positive control rather than hoping the
+    // fixture is tall enough.
+    //
+    // This used to read `measure.cards.some((c) => c.bodyScroll > c.bodyClient + 1)` — i.e. it
+    // asserted that the CURRENT fixture happened to overflow. That is not a property of the
+    // design, it is a property of the sample: the check passed at 1100×800 and failed at
+    // 1630×984 purely because the cards got taller, and its own message admitted the problem
+    // ("the fixture may be too small to prove the scroll works"). An assertion whose truth
+    // depends on how much text the fixture contains cannot distinguish "scrolling is broken"
+    // from "there was not enough text today".
+    //
+    // So: push a deliberately long block into a card body, measure, then remove it. The card
+    // must scroll internally AND the page must still not scroll — the two halves of the actual
+    // requirement, both of which can now fail.
+    const control = await page.evaluate(`(${access})((doc, win) => {
+      const body = doc.querySelector('.cardGrid > .card .cardBody')
+      if (body === null) return { none: true }
+      const filler = doc.createElement('div')
+      filler.id = 'probeFiller'
+      // Far taller than any viewport, so the body MUST clip and scroll.
+      for (let i = 0; i < 120; i += 1) {
+        const p = doc.createElement('p')
+        p.textContent = '探针填充行 ' + i + ' —— 用来把卡片正文撑到超过卡片高度。'
+        filler.appendChild(p)
+      }
+      body.appendChild(filler)
+      const sc = doc.querySelector('.scroll')
+      const col = doc.querySelector('.column')
+      const out = {
+        bodyClient: body.clientHeight,
+        bodyScroll: body.scrollHeight,
+        bodyOverflow: win.getComputedStyle(body).overflowY,
+        pageScroll: sc.scrollHeight,
+        pageClient: sc.clientHeight,
+        pageOverflow: win.getComputedStyle(sc).overflowY,
+        colScrollHeight: col.scrollHeight,
+        colClientHeight: col.clientHeight,
+      }
+      filler.remove()
+      return out
+    })`)
+    if (control.none === true) {
+      check('the positive control found a card body to fill', false, 'no .cardGrid > .card .cardBody')
+    } else {
+      check('POSITIVE CONTROL: a card body given long content really does scroll',
+        control.bodyScroll > control.bodyClient + 1 && control.bodyOverflow === 'auto',
+        `content ${control.bodyScroll}px in ${control.bodyClient}px, overflow-y=${control.bodyOverflow}`)
+      // …and the page still must not grow. This is the half that would break if the card body
+      // stopped absorbing the overflow and let it push the column instead.
+      check('and the page STILL does not scroll while that card overflows',
+        control.pageScroll <= control.pageClient + 1,
+        `page ${control.pageScroll}px in ${control.pageClient}px`)
+    }
   }
 
   check('every card actually has a body wrapper',
