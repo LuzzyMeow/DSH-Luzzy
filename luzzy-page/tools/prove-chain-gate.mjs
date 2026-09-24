@@ -19,6 +19,9 @@
  *                                                 -> 宿主的 goal_state 注入被当成人在说话
  *   armG  the skill-miss challenge never fires    -> 「答了没命中、却改了文件」重新变成一句没人问的话
  *   armH  the challenge is asked on every step    -> 追问退化成说教
+ *   armI  the GOAL-miss challenge never fires     -> 「答了一次性问答、却做了实质工作」重新没人问
+ *   armJ  the roster-miss notice goes back to a counter only
+ *                                                 -> 注入失败在会话里静默（AC-021）
  *
  * armE 与 armF 都是**实测出来的**，不是想出来的。同一个回合里连着被拦 5 次，其中 3 次是
  * `read`（门的文本要求先读的正文），另外几次是宿主的 `<goal_state>` 注入被当成了新一轮。
@@ -86,6 +89,8 @@ function failLines(output) {
  */
 const G_EXPECTED_FAILS = 7
 const H_EXPECTED_FAILS = 2
+const I_EXPECTED_FAILS = 5
+const J_EXPECTED_FAILS = 3
 
 function sandboxWith(label, mutate) {
   const sandbox = mkdtempSync(join(tmpdir(), 'luzzy-chain-proof-'))
@@ -246,6 +251,60 @@ try {
     const lines = failLines(result.output)
     check(`H: and exactly the ${H_EXPECTED_FAILS} "asked twice" assertions fail (${lines.length} FAIL lines)`,
       lines.length === H_EXPECTED_FAILS, lines.join(' | '))
+    for (const line of lines) console.log(`       ${line.trim()}`)
+  }
+
+  // ---- arm I: the GOAL-miss challenge never fires -------------------------------------
+  //
+  // 与 arm G 同型，针对的是本轮新增的另一半。用户报的缺陷原文：那次会话答了 `goalMatch="none"`
+  // （「这只是一次性问答」），同一轮却跑了几十次工具、下载并校验了一个 322 MB 的安装包 —— 没有
+  // 任何东西回头问过它一句。技能那一支有这个反问，目标这一支没有，于是**整条链里唯一能让所有门
+  // 都消失的那个答案，是唯一一句没人核对的话**。把触发条件整个拿掉，断言必须红。
+  {
+    const sandbox = sandboxWith('I', (s) => s.replace(
+      `      if (!hasGoal && entry.lastGoalMatch === 'none' && entry.goalMissChallenged !== turn) {
+        const work = observeTurn(agent)
+        if (work.toolCalls > 0 && (work.wroteFiles || work.ranCommand)) goalMiss = work
+      }`,
+      '      if (false) goalMiss = null',
+    ))
+    sandboxes.push(sandbox)
+    const result = runSuite(sandbox)
+    check('I: the suite goes red', result.exitedNonZero, 'it passed with the goal-miss challenge removed')
+    const lines = failLines(result.output)
+    check(`I: and exactly the ${I_EXPECTED_FAILS} goal-miss assertions fail (${lines.length} FAIL lines)`,
+      lines.length === I_EXPECTED_FAILS, lines.join(' | '))
+    // 精度判据写成「没有越界」，不是「每行都含某个词」：后者要穷举我这一块所有断言的措辞，
+    // 而措辞会变、越界不会 —— 上一版就是逐词匹配，漏了 `tool-call count` 那一条，于是断言本身
+    // 误报（5 条失败是真的，判它「不精确」是错的）。这里要证明的是：I 臂的失败**全部**落在
+    // 目标漏判那一段里，没有一条来自技能段、清单段或门那一族。
+    check('I: and none of the failures leaks into another block, so the arm is precise',
+      lines.length > 0 && lines.every((l) => !/activateSkill|二选一|TOLD the roster|SKILL_LIST|STATE_CHAIN|GOAL_GATE/.test(l)),
+      lines.join(' | '))
+    for (const line of lines) console.log(`       ${line.trim()}`)
+  }
+
+  // ---- arm J: the roster-miss notice goes back to being a counter only ----------------
+  //
+  // 这一臂守的是 AC-021 的形状：清单读不到时**只加计数、不在会话里说**。那正是实测里发生的
+  // 事 —— 一个真实会话在旧版宿主半上跑，收到四条不含清单的状态链，于是整段工作用错了通道，
+  // 而没有任何地方报过一句错。计数器只对去看页面的人可见，症状却在会话里。
+  {
+    const sandbox = sandboxWith('J', (s) => s.replace(
+      `      if (rosterError !== null) {
+        parts.push(renderRosterMissNotice(rosterError))`,
+      `      if (false && rosterError !== null) {
+        parts.push(renderRosterMissNotice(rosterError))`,
+    ))
+    sandboxes.push(sandbox)
+    const result = runSuite(sandbox)
+    check('J: the suite goes red', result.exitedNonZero, 'it passed with the notice silenced')
+    const lines = failLines(result.output)
+    check(`J: and exactly the ${J_EXPECTED_FAILS} "session is told" assertions fail (${lines.length} FAIL lines)`,
+      lines.length === J_EXPECTED_FAILS, lines.join(' | '))
+    check('J: and every failing assertion names the notice, so the arm is precise',
+      lines.length > 0 && lines.every((l) => /TOLD the roster|notice names where|restart exit/.test(l)),
+      lines.join(' | '))
     for (const line of lines) console.log(`       ${line.trim()}`)
   }
 } finally {

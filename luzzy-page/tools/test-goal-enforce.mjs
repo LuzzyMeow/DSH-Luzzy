@@ -22,13 +22,14 @@
  * Run: node tools/test-goal-enforce.mjs
  */
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
+const PLUGIN_DIR = join(HERE, '..')
 const enforce = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-enforce.mjs')).href)
 const domain = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-domain.mjs')).href)
 const store = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-store.mjs')).href)
@@ -1765,6 +1766,50 @@ try {
   eq('so three injections total', enforcement.stats().rosterInjected, 3)
 }
 
+console.log('goal-enforce: a roster read failure reaches the SESSION, not just the counters')
+{
+  // 上面那一块证明的是**成功路径**（清单注入了、去重了、压缩后回来了）。这一段证明失败路径：
+  // 读不到时必须在会话里**说一句**，而不只是让统计计数器加一。区别是决定性的 —— 计数器只对
+  // 去看页面的人可见，而这一次的症状在会话里：人格层写着「技能清单由状态链按节点注入」，模型
+  // 于是以为清单已经到手，于是不觉得自己缺了什么。
+  //
+  // 怎么制造失败：把 `skill-roster.mjs` 指向的那个文件搬走。`readRoster()` 的源路径是从模块
+  // 自身位置算出来的（`../docs/skill-roster-injection.md`），所以在一个临时沙箱里改名即可 ——
+  // 这也顺带证明了**它真的在读那个文件**，而不是内联了另一份副本。
+  const sandboxRoot = mkdtempSync(join(tmpdir(), 'luzzy-roster-miss-'))
+  tempRoots.push(sandboxRoot)
+  cpSync(join(PLUGIN_DIR, 'lib'), join(sandboxRoot, 'lib'), { recursive: true })
+  cpSync(join(PLUGIN_DIR, 'docs'), join(sandboxRoot, 'docs'), { recursive: true })
+  renameSync(join(sandboxRoot, 'docs', 'skill-roster-injection.md'),
+    join(sandboxRoot, 'docs', 'moved-away.md'))
+
+  const sandboxRoster = await import(pathToFileURL(join(sandboxRoot, 'lib', 'skill-roster.mjs')).href)
+  const broken = sandboxRoster.readRoster()
+  check('the sandbox really cannot read the roster', broken.error !== null, String(broken.error))
+
+  const sandboxEnforce = await import(pathToFileURL(join(sandboxRoot, 'lib', 'goal-enforce.mjs')).href)
+  const missPaths = freshPaths()
+  const missId = 'sess-roster-miss'
+  const missGoal = { ...GOAL, objective: '清单读不到时要说', revision: 1 }
+  store.writeDeliveryOverlay(missPaths, missId, domain.emptyDelivery(missId), 0)
+  const missCtx = fakeCtx({ goals: { get: () => missGoal } }, ['webServer'])
+  sandboxEnforce.resetCounters()
+  const missEnforcement = sandboxEnforce.installEnforcement(missCtx, { paths: missPaths, options: {} })
+  const mine = { role: 'user', id: 'u-miss', content: [{ type: 'text', text: '继续' }] }
+  const missResult = await fire(missCtx, 'agent/pre-step',
+    { agent: fakeAgent(missId), messages: [mine], turn: 1, step: 1, signal: undefined },
+    () => Promise.resolve({ kind: 'enter', messages: [mine] }), { kind: 'enter', messages: [mine] })
+  const all = (missResult.messages ?? []).map((m) => m?.content?.[0]?.text ?? '').join('\n')
+
+  check('the session is TOLD the roster is missing', all.includes('<roster_miss>'), all.slice(0, 300))
+  check('and the notice names where the body lives, so the model can still go read it',
+    all.includes('skill-roster-injection.md'), all.slice(0, 400))
+  check('and the notice offers the restart exit for a stale host half',
+    all.includes('重启 DSH'), all.slice(0, 400))
+  eq('and the miss is counted', missEnforcement.stats().rosterMiss, 1)
+  eq('and nothing was injected, so the counter did not move', missEnforcement.stats().rosterInjected, 0)
+}
+
 console.log('goal-enforce: the roster module slices the file, and fails soft')
 {
   // 切片器的两条性质：切对了范围，以及读不到时**不抛**。
@@ -1785,6 +1830,30 @@ console.log('goal-enforce: the roster module slices the file, and fails soft')
   check('and the digest is stable across reads', rosterMod.readRoster().digest === loaded.digest)
   check('and it names the repo root readers must fetch from',
     loaded.text.includes('raw.githubusercontent.com/LuzzyMeow/DSH-Luzzy'))
+}
+
+console.log('goal-enforce: a roster read failure is SAID, not just counted')
+{
+  // 为什么这条文案存在、而不是只加一个计数器：清单原本常驻系统提示词，改成节点注入之后多了一条
+  // 新的失败模式 —— **注入没发生，而人格层仍然写着它会发生**。实测过一次完整后果：一个真实会话
+  // 在旧版宿主半上跑，收到四条不含清单的状态链，于是不知道有 26 份 roster 可读、不知道检索必须走
+  // AnySearch、也不知道 web_fetch 是被禁通道，整段工作用错了工具（32 次终端、5 次 web_fetch），
+  // 而没有任何地方报过一句错 —— 页面上的计数器只对去看页面的人可见。
+  const block = enforce.renderRosterMissNotice('ENOENT: no such file or directory')
+  check('it says this is NOT "the roster is not needed this turn"', block.includes('不是「本轮不需要清单」'), block)
+  check('and it carries the underlying reason', block.includes('ENOENT'), block)
+  check('and it says the roster DOES exist in this deployment', block.includes('是存在的'), block)
+  check('and it names where the body lives', block.includes('skill-roster-injection.md'), block)
+  check('and it gives the first exit: go read it', block.includes('activateSkill'), block)
+  check('and the second exit: a stale host half means restart DSH', block.includes('重启 DSH'), block)
+  // The failure must not be reported as a policy. If it read as "the checklist says no skill applies",
+  // the model would skip the work the checklist exists to make it do.
+  //
+  // 判据是**它怎么描述这件事**，不是「出现过哪几个字」：草案里那句「不要凭印象认定某一类活
+  // 不需要 skill」是提醒，而上一版断言用 `includes('不需要 skill')` 把它判成了违规 —— 断言错了，
+  // 不是文案错了。改成检查它有没有把失败**说成一种规定**。
+  check('and it does NOT present the failure as a policy statement',
+    !/清单(里|中)?(说|规定|表明)/.test(block) && !/本轮无(需|须)技能/.test(block), block)
 }
 
 console.log('goal-enforce: turn observation reports WHICH files changed')
@@ -1878,6 +1947,40 @@ console.log('goal-enforce: turn observation reports WHICH files changed')
     check(`and does NOT name a category for the model (said: ${said.join('/') || 'nothing'})`, said.length === 0, block)
   }
 
+  console.log('goal-enforce: the goal-miss challenge is the skill-miss challenge\'s twin')
+  {
+    // 用户报的缺陷：那次会话答了 goalMatch="none"（「这只是一次性问答」），同一轮却跑了几十次
+    // 工具、翻了好几个网页、下载并校验了一个 322 MB 的安装包。技能那一支有这个反问，目标那一支
+    // 没有 —— 于是整条链里最该被核对的那句话，是唯一一句没人核对的。
+    const withFiles = enforce.renderGoalMissChallenge({ toolCalls: 32, files: ['a.mjs', 'b.mjs'] })
+    check('it states the answer the model gave', withFiles.includes('未命中'), withFiles)
+    check('and states the fact that contradicts it', withFiles.includes('32 次工具调用'), withFiles)
+    check('and names the files it is asking about',
+      withFiles.includes('a.mjs') && withFiles.includes('b.mjs'), withFiles)
+    check('and offers the first exit: build a goal', withFiles.includes('create_goal'), withFiles)
+    check('and the first exit names how to record acceptance',
+      withFiles.includes('addAcceptance'), withFiles)
+    check('and offers the second exit: say why it really is a one-off',
+      withFiles.includes('一次性问答'), withFiles)
+    check('and says it is not a refusal', withFiles.includes('这不是拒绝'), withFiles)
+
+    // THE case that must not be missed. The session this exists for changed NO files — it
+    // downloaded and verified an installer and read five pages. A block that only rendered a file
+    // list would render an empty list for exactly the turn it was written for.
+    const commandsOnly = enforce.renderGoalMissChallenge({ toolCalls: 14, files: [] })
+    check('a turn with no file writes still renders the tool-call count',
+      commandsOnly.includes('14 次工具调用'), commandsOnly)
+    check('and still offers both exits without a file list',
+      commandsOnly.includes('create_goal') && commandsOnly.includes('一次性问答'), commandsOnly)
+
+    // Same discipline as the skill twin: the harness supplies the FACT, never the verdict. The
+    // harness cannot tell a refactor from an explanation, so a block that decided would be wrong
+    // exactly where the decision was hard.
+    const verdicts = ['应该建', '显然', '属于长期', '不是一次性', '必须建']
+    const said = verdicts.filter((word) => withFiles.includes(word))
+    check(`and does NOT decide for the model (said: ${said.join('/') || 'nothing'})`, said.length === 0, withFiles)
+  }
+
   console.log('goal-enforce: answering skill-miss while writing files gets asked ONCE')
   {
     // The measured hole this closes: several turns in this project's own session answered
@@ -1949,6 +2052,126 @@ console.log('goal-enforce: turn observation reports WHICH files changed')
     const secondAsk = await openTurn('sm-2', 2, 2)
     check('a new turn asks the challenge again', noticeText(secondAsk).includes(MARK), noticeText(secondAsk))
     eq('and the challenge counter says two', enforcement.stats().skillMissChallenged, 2)
+  }
+
+  console.log('goal-enforce: answering goal-miss while doing real work gets asked ONCE')
+  {
+    // THE measured hole. 用户报的原文：那次会话答 goalMatch="none"，同一轮跑了 32 次工具调用、
+    // 5 个 read_image、5 次 web_fetch，下载并校验了一个 322 MB 的安装包 —— 而没有一次被问过
+    // 「这真的是一次性问答吗」。技能那一支有这条反问（上面那一块），目标这一支没有。
+    const paths = freshPaths()
+    const sessionId = 'sess-goal-miss'
+    const ctx = fakeCtx({ goals: { get: () => undefined } }, ['webServer'])
+    enforce.resetCounters()
+    const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+    const chain = chainHarness(paths, sessionId)
+    // 这一段刻意**一个文件都不改**：那次被漏判的会话正是这个形状（下载 + 校验 + 翻网页）。
+    // 用「改过文件」当判据的实现在这里会静默不触发，而这正是它本该抓到的那一次。
+    //
+    // 而且刻意**没有目标**（`get: () => undefined`）：这条反问的全部理由是「答 none 能让后面
+    // 所有门都消失」，而目标存在时那句话不成立 —— 那种情况下不该问。两个条件各有一条断言。
+    const events = [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'c1', name: 'pwsh', arguments: '{"command":"curl.exe -L -o dsh.exe https://download.deepseek.com/…"}' } },
+      { type: 'tool/result', data: { message: { id: 'c1' } } },
+      { type: 'tool/call', data: { callId: 'c2', name: 'pwsh', arguments: '{"command":"Get-AuthenticodeSignature dsh.exe"}' } },
+      { type: 'tool/result', data: { message: { id: 'c2' } } },
+    ]
+    const agent = fakeAgent(sessionId, events)
+    const notices = (decision) => (decision.messages ?? []).filter((message) => message?.source?.kind === 'plugin')
+    const noticeText = (decision) => String(notices(decision)[0]?.content?.[0]?.text ?? '')
+    const openTurn = (messageId, turn, step) => {
+      const claimed = { role: 'user', id: messageId, content: '接着做' }
+      return fire(ctx, 'agent/pre-step', { agent, messages: [claimed], turn, step, signal: {} },
+        { kind: 'enter', messages: [claimed] })
+    }
+    const judge = (payload) => {
+      chain.persist((d) => domain.applyDeliveryOp(d, 'judgeChain', payload, { at: Date.now() }).delivery)
+      return fire(ctx, 'tools/post-execute',
+        { name: 'goal_delivery', arguments: { action: 'judgeChain', payload }, agent },
+        { isError: false, content: [{ type: 'text', text: 'ok: x\n{"status":"ok"}' }] },
+        { kind: 'accept' })
+    }
+    // 一个只属于这条挑战的说法。「未命中」不能当标记：状态链自己就会写出这一格的状态。
+    const MARK = '唯一能让所有门'
+
+    await openTurn('gm-1', 1, 1)
+    // Before the model speaks in this turn the field must be empty — otherwise the challenge fires
+    // on a turn whose answer does not exist yet (the same hole the skill twin has a test for).
+    eq('a turn that has not answered yet carries no goal answer',
+      enforce.readCounters(sessionId).lastGoalMatch, null)
+    await judge({ goalMatch: 'none', skillCheck: 'none' })
+    eq('post-execute records the GOAL answer too, not just the skill one',
+      enforce.readCounters(sessionId).lastGoalMatch, 'none')
+
+    const challenged = await openTurn('gm-1', 1, 2)
+    const text = noticeText(challenged)
+    check(`the goal-miss challenge fires (${MARK})`, text.includes(MARK), text)
+    check('and it reports the tool-call count as the fact', text.includes('2 次工具调用'), text)
+    check('and offers create_goal as the first exit', text.includes('create_goal'), text)
+    eq('and the goal-miss counter says one', enforcement.stats().goalMissChallenged, 1)
+
+    const again = await openTurn('gm-1', 1, 3)
+    check('the same turn is never asked twice', !noticeText(again).includes(MARK), noticeText(again))
+    eq('and the counter did not move', enforcement.stats().goalMissChallenged, 1)
+
+    // A FAILED command is not work: the same rule `observeTurn` already applies to writes.
+    const failedPaths = freshPaths()
+    const failedId = 'sess-goal-miss-failed'
+    const failedCtx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(failedCtx, { paths: failedPaths, options: {} })
+    const failedChain = chainHarness(failedPaths, failedId)
+    const failedAgent = fakeAgent(failedId, [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'f1', name: 'pwsh', arguments: '{"command":"nope"}' } },
+      { type: 'tool/result', data: { error: { name: 'Error' }, message: { id: 'f1' } } },
+    ])
+    await failedChain.persist((d) => domain.applyDeliveryOp(d, 'judgeChain', { goalMatch: 'none', skillCheck: 'none' }, { at: Date.now() }).delivery)
+    await fire(failedCtx, 'tools/post-execute',
+      { name: 'goal_delivery', arguments: { action: 'judgeChain', payload: { goalMatch: 'none', skillCheck: 'none' } }, agent: failedAgent },
+      { isError: false, content: [{ type: 'text', text: 'ok: x\n{"status":"ok"}' }] },
+      { kind: 'accept' })
+    const claimed = { role: 'user', id: 'gm-f', content: '接着做' }
+    const failedTurn = await fire(failedCtx, 'agent/pre-step',
+      { agent: failedAgent, messages: [claimed], turn: 1, step: 2, signal: {} },
+      { kind: 'enter', messages: [claimed] })
+    const failedText = String((failedTurn.messages ?? []).filter((m) => m?.source?.kind === 'plugin')[0]?.content?.[0]?.text ?? '')
+    check('a FAILED command is not work, so no challenge', !failedText.includes(MARK), failedText)
+
+    // ---- 边界：已经有目标的会话不该被问这一句 ----------------------------------
+    //
+    // 这条反问的全部理由是「答 none 能让后面所有门都消失」。目标已经存在时那句话不成立 ——
+    // 目标门、完成门、漂移检测照旧适用，答 none 换不到任何豁免。所以在那种情况下再问，是拿一个
+    // 不存在的代价去骚扰模型，还会把「你该建目标」这条信息混进一个已经有目标的会话。
+    //
+    // 这条断言是**反证臂逼出来的**：`prove-chain-gate` 的 G 臂（拆掉技能那一支的触发）用的是
+    // 一个有目标的 fixture，我的新反问在那个 fixture 里也触发了，于是 G 臂数的 7 条失败里有 4 条
+    // 是被新代码顶掉的 —— 一条本该只测技能支的臂，开始测两件事。
+    const gPaths = freshPaths()
+    const gId = 'sess-goal-miss-hasgoal'
+    const gCtx = fakeCtx({ goals: { get: () => GOAL } }, ['webServer'])
+    enforce.resetCounters()
+    enforce.installEnforcement(gCtx, { paths: gPaths, options: {} })
+    const gChain = chainHarness(gPaths, gId)
+    const gAgent = fakeAgent(gId, [
+      { type: 'turn/start', data: { turn: 1 } },
+      { type: 'tool/call', data: { callId: 'g1', name: 'pwsh', arguments: '{"command":"npm test"}' } },
+      { type: 'tool/result', data: { message: { id: 'g1' } } },
+    ])
+    const gClaimed = { role: 'user', id: 'gm-g', content: '接着做' }
+    await fire(gCtx, 'agent/pre-step', { agent: gAgent, messages: [gClaimed], turn: 1, step: 1, signal: {} },
+      { kind: 'enter', messages: [gClaimed] })
+    await gChain.persist((d) => domain.applyDeliveryOp(d, 'judgeChain', { goalMatch: 'none', skillCheck: 'none' }, { at: Date.now() }).delivery)
+    await fire(gCtx, 'tools/post-execute',
+      { name: 'goal_delivery', arguments: { action: 'judgeChain', payload: { goalMatch: 'none', skillCheck: 'none' } }, agent: gAgent },
+      { isError: false, content: [{ type: 'text', text: 'ok: x\n{"status":"ok"}' }] },
+      { kind: 'accept' })
+    const gTurn = await fire(gCtx, 'agent/pre-step',
+      { agent: gAgent, messages: [gClaimed], turn: 1, step: 2, signal: {} },
+      { kind: 'enter', messages: [gClaimed] })
+    const gText = String((gTurn.messages ?? []).filter((m) => m?.source?.kind === 'plugin')[0]?.content?.[0]?.text ?? '')
+    check('a session that ALREADY has a goal is not asked it', !gText.includes(MARK), gText)
   }
 } finally {
   for (const root of tempRoots) {

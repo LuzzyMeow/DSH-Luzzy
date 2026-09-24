@@ -429,6 +429,19 @@ function counterFor(sessionId) {
       lastSkillCheck: null,
       skillMissChallenged: null,
       /**
+       * 目标那一格的答案，以及「问过没有」。与 `lastSkillCheck` / `skillMissChallenged` 成对。
+       *
+       * WHY THE GOAL SIDE NEEDS ITS OWN PAIR. 用户报的缺陷之一：那次会话答了 `goalMatch=none`，
+       * 却在同一轮里跑了几十次工具、翻了好几个网页，没有任何东西回头问过它一句。技能那一支有
+       * 这个反问（`renderSkillMissChallenge`），目标这一支没有 —— 于是「这只是一次性问答」成了
+       * 一句**免费**的话。免费不是指没成本，是指**没人核对**，而它恰好是整条链里最该被核对的一句：
+       * 答错了它，后面所有门槛都不存在了。
+       *
+       * 同样存轮次号而不是布尔，理由与 `skillMissChallenged` 一字不差。
+       */
+      lastGoalMatch: null,
+      goalMissChallenged: null,
+      /**
        * 已经把哪几条待确认提案推进对话里了（P-nnn）。
        *
        * 这是**运行时事实**，和 `chainPending` 同一类，所以存在内存里而不是交付状态里：
@@ -709,7 +722,15 @@ export function renderPreflight(delivery, goal, meta = {}) {
   // One line of instruction, and it points at the tool rather than repeating the rules the
   // system prompt already carries. Repeating policy here would be the token waste §83 is
   // about — and the model already has it.
-  lines.push(`做完本轮的工作后用 ${DELIVERY_TOOL} 同步计划；证据必须来自真实跑过的东西。`)
+  //
+  // 但它得指得出**两种**改法。原句只有一个「同步计划」，而「目标本身不对」不是同步能解决的：
+  // 实测里模型在这句话底下只会去改 focus / next，从没动过 objective —— 不是因为不该动，是因为
+  // 这句话没给它那个词。
+  //
+  // 只说一个词，不展开 —— 这一块**每一轮**都下发，而四个 propose* 的完整名字已经写在状态链里了
+  // （那里也每轮下发，且是「这一轮能做什么」的正式落点）。这里多写一份就是重复付费，实测被
+  // 「the block stays compact」那条预算断言抓住了。
+  lines.push(`做完本轮的工作后用 ${DELIVERY_TOOL} 同步计划；证据必须来自真实跑过的东西。目标本身要改就提 proposal。`)
   if (meta.artifactPath !== undefined) lines.push(`完整计划（需要时再读）：${meta.artifactPath}`)
 
   if (full) {
@@ -807,6 +828,11 @@ export function renderChain(delivery, meta = {}) {
   lines.push('【状态链 · 每轮都要走】动手之前先答这两步，答案是工具调用，不是心里想一下：')
   lines.push('① 本轮是不是在推进一个长任务（目标分支）？')
   lines.push('   命中 → 目标必须完整：目标 / 验收标准 / 范围边界 / 已知约束。每轮都会随本块注入；执行途中发现计划不对，**可以改**（' + DELIVERY_TOOL + '）。')
+  // 「改」有两种，而原句只指得出第一种。实测：模型读到「可以改」加一串计划维护动作，就把它读成
+  // 「改**计划**」—— 于是「目标本身不对」这件事没有词汇。用户报的第一个缺陷（agent 不知道设置目标）
+  // 有一半就落在这里：proposeObjective 一直在它手上，但注入文本从没点过这个名字。
+  lines.push('        改**计划**：setTask / setFocus / setNext / addEvidence。')
+  lines.push('        改**目标本身**（换 objective、改验收标准、改范围或约束）：proposeObjective / proposeAcceptanceChange / proposeScope / proposeConstraints —— 提完立刻用 ask_user_question 让用户拍板。')
   lines.push('   未命中 → 本轮不要求目标，但这一步照样要答。')
   lines.push('② 本轮要不要按技能清单执行（技能分支）？')
   lines.push('   命中 → **先把那份 skill 的完整正文读一遍**，再用 activateSkill 登记：技能名称 / 技能描述 / 针对本次任务的作用 / 来源（仓库链接或本地路径）。四项缺一不可。')
@@ -953,8 +979,13 @@ export function renderChainGateRefusal(toolName, entry) {
     '',
     '① **goalMatch** — 本轮是不是在推进一个长任务？',
     '   命中 → 目标必须完整（目标 / 验收标准 / 范围 / 已知约束），而且每轮都会被注入回来；',
-    '        执行途中发现计划不对，**可以改**：setTask / setFocus / setNext / addEvidence 等。',
+    '        执行途中发现计划不对，**可以改**。',
+    '        · 改**计划**：setTask / setFocus / setNext / addEvidence',
+    '        · 改**目标本身**：proposeObjective / proposeAcceptanceChange / proposeScope /',
+    '          proposeConstraints（只提议，立刻用 ask_user_question 让用户拍板）',
+    '        · 目标被用户改过、或计划还没绑上运行时目标：reconcile',
     '   未命中 → 本轮不要求目标。这不是跳过，是另一个答案。',
+    '   **注意**：答 none 不是免费的。这一轮真的动过工作区却答了 none，会被回头追问一次。',
     '',
     '② **skillCheck** — 本轮要不要按技能清单执行？',
     '   命中 → 先把那份 skill 的**完整正文**读一遍，再 activateSkill 登记四项：',
@@ -1090,6 +1121,85 @@ export function renderSkillMissChallenge(files) {
 }
 
 /**
+ * The challenge for "answered goal-miss, but this turn did real work".
+ *
+ * WHY THIS IS THE TWIN OF `renderSkillMissChallenge`. 用户报的缺陷原文：那次会话里 agent 答了
+ * `goalMatch=none`（「这只是一次性问答」），同一轮却跑了几十次工具、翻了好几个网页、下载并校验了
+ * 一个 322 MB 的安装包。技能那一支有一条反问盯着同样的形状，目标这一支没有 —— 所以这句最该被
+ * 核对的话，是整条链里唯一一句**没人核对**的话。
+ *
+ * 它为什么值得核对：`goalMatch=none` 是**唯一能让后面所有门都消失的一个答案**。答成 none，
+ * 目标门、完成门、漂移检测全都不再适用。技能答错了只是少读一份文档；这一格答错了，是整轮的
+ * 约束都没了。所以它至少要付一次「被问一句」的代价。
+ *
+ * NOT A GATE —— 与技能那一支同一条纪律。答 none 依然合法（真的有一次问答），也不拦任何工具。
+ * 它只把模型自己看不见的那件事摆到它面前：**「你答的」和「你做的」对不上**。判断仍然归模型
+ * （§38/§39：宿主给事实，模型做判断），宿主不做语义判定 —— 它数不出来哪些文件改动算「长期工作」，
+ * 硬判会在最要紧的地方判错。
+ *
+ * @param {{toolCalls: number, files: string[]}} work - what `observeTurn` saw.
+ * @returns {string} the challenge block.
+ */
+export function renderGoalMissChallenge(work) {
+  const facts = [`    · ${work.toolCalls} 次工具调用`]
+  if (work.files.length > 0) {
+    facts.push(`    · 改过 ${work.files.length} 个文件：`)
+    for (const path of work.files.slice(0, 5)) facts.push(`        ${path}`)
+  }
+  return [
+    '这一轮目标那一格你答的是「未命中（本轮不是长期任务）」，但同一轮确实做了实质工作：',
+    '',
+    ...facts,
+    '',
+    '「一次性问答」和这些事实摆在一起时，二选一，别就这么过去：',
+    '',
+    '  1. 如果这其实是长期工作，就建目标 —— `create_goal` 写下要交付什么，再用 ' +
+      `${DELIVERY_TOOL}(action="addAcceptance") 记下验收标准。`,
+    '  2. 如果确实是一次性问答，就说清为什么：这轮的产物是什么、为什么它不需要跨轮、也不需要有验收标准。',
+    '',
+    '这不是拒绝：答「未命中」依然合法，也没有任何工具因为这一步被拦住。只是它是唯一能让所有门',
+    '都消失的那个答案，所以它至少要被问过一次。',
+  ].join('\n')
+}
+
+/**
+ * The notice for "the skill roster could not be injected this turn".
+ *
+ * WHY THIS IS SAID OUT LOUD INSTEAD OF ONLY COUNTED. 这份清单原本常驻系统提示词，改成节点注入之后
+ * 有了一条新的失败模式：注入没发生，而**人格层仍然写着它会发生**。实测过一次完整的后果 ——
+ * 一个真实会话在旧版宿主半上跑，收到四条不含清单的状态链，于是它不知道有 26 份 roster 可读、
+ * 不知道检索必须走 AnySearch、也不知道 `web_fetch` 属于被禁通道。整段工作用错了工具（32 次终端、
+ * 5 次 web_fetch），而**没有任何地方报过一句错**：页面上的计数器只对去看页面的人可见。
+ *
+ * 所以这条要在会话里说。三件事缺一不可：发生了什么、为什么现在还不知道该读哪份 skill、以及
+ * 怎么恢复 —— 最后一条尤其重要，因为对模型来说「少了一张表」和「我还没读那份表」在行为上
+ * 长得一模一样，不给出口就会一路猜下去。
+ *
+ * @param {string} reason - `readRoster()` 的 error 字段原文。
+ * @returns {string} the notice block.
+ */
+export function renderRosterMissNotice(reason) {
+  return [
+    '<roster_miss>',
+    '本轮**没有拿到技能清单正文** —— 这不是「本轮不需要清单」，是注入失败：',
+    '',
+    `    ${reason}`,
+    '',
+    '后果说清楚：现在你手上**没有**那张「哪类任务读哪份 skill」的表，所以不要凭印象认定',
+    '某一类活不需要 skill，也不要因为没看到清单就认为不存在清单。技能清单在这个部署里是存在的，',
+    '它的正文住在 `luzzy-page/docs/skill-roster-injection.md`。',
+    '',
+    '两条出路，选一条：',
+    '',
+    '  1. **读它**：`read` 那个文件，按里面的类目判类目、再按里面的在线地址读对应 skill 的正文，',
+    '     读完用 activateSkill 登记四项。',
+    '  2. **如果是宿主半版本不一致**（刚改过插件但没重启 DSH）：告诉用户需要重启 DSH，',
+    '     然后照常继续这一轮 —— 别把「注入失败」当成「这一轮不用按清单做」。',
+    '</roster_miss>',
+  ].join('\n')
+}
+
+/**
  * Read a "this exchange is not a task" declaration out of a `goal_delivery` call.
  *
  * The model supplies the JUDGEMENT (§39) and this reads it out as a fact, so the gate never
@@ -1211,6 +1321,13 @@ export function installEnforcement(ctx, deps) {
      * 从来没触发过，而它本该在每一轮这么答的时候都触发一次。
      */
     skillMissChallenged: 0,
+    /**
+     * 「答了未命中（本轮不是长期任务）、但这一轮确实做了实质工作」被追问过多少次。
+     *
+     * 与上面那个是**对称的两个计数**，理由也一样：这条反问不拦任何东西，所以它唯一的价值就是
+     * 让「到底问过没有」看得见 —— 恒为零说明这句最该被核对的话，仍然一次都没被核对。
+     */
+    goalMissChallenged: 0,
   }
 
   // ---- layer 4: orient the model before it works ---------------------------
@@ -1289,6 +1406,9 @@ export function installEnforcement(ctx, deps) {
         // 而这一轮还没答，它就该是空。
         entry.lastSkillCheck = null
         entry.skillMissChallenged = null
+        // 目标那一格同样作废，理由同上：不清的话，这一轮**还没答**就会先被追问上一轮的答案。
+        entry.lastGoalMatch = null
+        entry.goalMissChallenged = null
       }
 
       const resolved = liveGoalFor(ctx, agent)
@@ -1380,7 +1500,29 @@ export function installEnforcement(ctx, deps) {
         if (work.files.length > 0) skillMiss = work.files
       }
 
-      if (!chainDue && !goalDue && nudge === null && skillMiss === null) return decision
+      // ---- 目标漏判挑战：这一轮做了实质工作，却说「本轮不是长期任务」------------
+      //
+      // 与技能那一支同一条触发纪律，但有两处**有意不同**，两处都是被实测逼出来的：
+      //
+      // 1. **判据更宽**：看「跑过命令**或**改过文件」。技能那一支只看改文件，因为技能清单管的是
+      //    写代码 / 设计 / 文档那几类活；「这值得建目标吗」跟改不改文件无关 —— 实测那次被漏判的
+      //    会话正是一个文件都没改，却下载并校验了一个 322 MB 的安装包、翻了五个网页。只看文件的
+      //    话，这条反问恰好会漏掉它本该抓的那一次。
+      //
+      // 2. **只在还没有目标时才问**（`!hasGoal`）。这条反问的全部理由是：`goalMatch=none` 是**唯一
+      //    能让后面所有门都消失的答案**。而目标已经存在时那句话根本不成立 —— 目标门、完成门、
+      //    漂移检测照旧适用，答 none 换不到任何豁免。在那种情况下再问一遍，是拿一个不存在的
+      //    代价去骚扰模型（§83），而且会把「你该建目标」这条信息混进一个已经有目标的会话。
+      //
+      // `observeTurn` 在这里只调一次：它扫的是同一段事件日志，两个条件都为假时（绝大多数轮次）
+      // 这一步是两次内存读取。
+      let goalMiss = null
+      if (!hasGoal && entry.lastGoalMatch === 'none' && entry.goalMissChallenged !== turn) {
+        const work = observeTurn(agent)
+        if (work.toolCalls > 0 && (work.wroteFiles || work.ranCommand)) goalMiss = work
+      }
+
+      if (!chainDue && !goalDue && nudge === null && skillMiss === null && goalMiss === null) return decision
 
       // 三块（链 / 目标 / 技能）说的是同一份状态，只读一次：读两遍除了多一次 IO，还会在两次读
       // 之间留一个不一致的窗口 —— 而这是每轮都要走的路径。
@@ -1408,6 +1550,7 @@ export function installEnforcement(ctx, deps) {
       // 压缩后摘要要作废：上下文被压缩意味着模型手上那份已经没了，清单必须重来一次。判据是
       // 确定性的 —— 出现一个新的 compaction checkpoint（同一个 `compactionId` 只消费一次）。
       let roster = null
+      let rosterError = null
       if (chainDue) {
         const compactionId = compactionCheckpoint(decision.messages)
         if (compactionId !== null && compactionId !== entry.rosterCompactionId) {
@@ -1431,6 +1574,12 @@ export function installEnforcement(ctx, deps) {
           // 这个「只计数」的约定出现第一个例外，而例外一旦有了第二个就没人记得住。
           // 页面的诊断区读 `readCounters()`，`rosterMiss` 在那里看得见。
           stats.rosterMiss += 1
+          // 但「计数器里有」不等于「这件事被说过」。计数只对去看页面的人可见，而这一次的
+          // 症状在**会话里**：人格层写着「技能清单由状态链按节点注入」，模型于是以为清单已经
+          // 到手，于是不觉得自己缺了什么 —— 那正是实测里发生的事（一次真实的会话因此整段用错
+          // 了通道：32 次终端 + 5 次 web_fetch，因为它不知道有 26 份 roster，也不知道那些通道
+          // 是被禁的）。所以要**在会话里说一句** —— 一句话，不是一张表。
+          rosterError = loaded.error
         }
       }
 
@@ -1444,6 +1593,12 @@ export function installEnforcement(ctx, deps) {
       if (chainDue && delivery !== null) {
         parts.push(renderChain(delivery, { owed: entry.chainPending, roster: roster }))
         summary = '状态链'
+      }
+      // 清单注入失败的说明紧跟在链后面 —— 它说的正是**链里缺了什么**，所以读的时候必须挨着，
+      // 否则「这条链没有清单」这件事又要靠模型自己去对比才发现（而它没有对照物，发现不了）。
+      if (rosterError !== null) {
+        parts.push(renderRosterMissNotice(rosterError))
+        if (summary === '状态链') summary = '状态链（清单缺失）'
       }
       if (goalDue && delivery !== null) {
         entry.lastPreflightTurn = turn
@@ -1489,6 +1644,15 @@ export function installEnforcement(ctx, deps) {
         stats.skillMissChallenged += 1
         parts.push(renderSkillMissChallenge(skillMiss))
         if (summary === '没有目标') summary = '技能漏判'
+      }
+
+      // 目标漏判挑战紧挨着技能那一条 —— 两者是同一个形状的两个分支（「你答的」和「你做的」
+      // 对不上），读的时候应当是连着的两段，而不是散在两处。摘要同样只在没有别的理由时才顶上来。
+      if (goalMiss !== null) {
+        entry.goalMissChallenged = turn
+        stats.goalMissChallenged += 1
+        parts.push(renderGoalMissChallenge(goalMiss))
+        if (summary === '没有目标') summary = '目标漏判'
       }
 
       // ---- 待确认提案：推到对话里，而不是躺在页面上等 ------------------------
@@ -1748,6 +1912,10 @@ export function installEnforcement(ctx, deps) {
       const payload = typeof args.payload === 'object' && args.payload !== null ? args.payload : {}
       entry.lastSkillCheck =
         payload.skillCheck === 'hit' || payload.skillCheck === 'none' ? payload.skillCheck : null
+      // 目标那一格同样记一份，理由与上面一字不差（`renderGoalMissChallenge` 要据此问一句
+      // 「你答了未命中，可这一轮做了实质工作」）。同样只认那两个合法值，取值非法一律当没答过。
+      entry.lastGoalMatch =
+        payload.goalMatch === 'matched' || payload.goalMatch === 'none' ? payload.goalMatch : null
       return decision
     })
   }
