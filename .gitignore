@@ -37,3 +37,7 @@ logs/
 # 而这件事要到克隆之后才会发现。所以给这一个文件开例外，而不是把广谱规则收窄 ——
 # 收窄规则会让真正的凭证从此漏过。
 !luzzy-page/src/styles/tokens.css
+
+# Python 字节码缓存：从上游复制 skill 时被 -Recurse 带进来过一个 .pyc，不该进仓库
+__pycache__/
+*.pyc
