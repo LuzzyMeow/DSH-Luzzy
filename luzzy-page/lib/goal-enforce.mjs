@@ -519,6 +519,61 @@ export function commitOp(deps, op, payload, options = {}) {
     return { ok: false, code: result.code, reason: result.error }
   }
 
+  // ---- AUTO-BIND THE PLAN TO THE RUNTIME GOAL -------------------------------
+  //
+  // Found in a real session: 205 changes in, `goalId` and `goalRevision` were STILL null and
+  // `reconcile` had never once been called by hand. The bind was an op the model had to
+  // remember, and it never did.
+  //
+  // That null is not a cosmetic gap — it silently disables the two guards that exist to
+  // catch a plan drifting away from its goal:
+  //
+  //   integrity()     only compares ids when `delivery.goalId !== null`   (goal-domain ~672)
+  //   detectDrift()   only compares when the mirror fields are non-null   (goal-domain ~789)
+  //
+  // So an unbound overlay is exempt from drift detection entirely, while the page renders it
+  // as though it were the projection of the live goal. The console said "this plan describes
+  // that goal"; nothing had ever checked.
+  //
+  // WHY BIND HERE RATHER THAN ASK THE MODEL TO CALL `reconcile`
+  //
+  // This is the same lesson as the session gate: enforcement placed on the model's memory is
+  // not enforcement. The identity of the goal a plan belongs to is not a judgement — the
+  // harness already holds both halves (`delivery` on disk, the live goal through `ctx`), so
+  // the join is deterministic and belongs here.
+  //
+  // `reconcile` remains as the EXPLICIT re-baseline after a human edits the objective: this
+  // only fills a binding that was never set, and never overwrites one that exists. A plan
+  // bound to goal A must not be silently re-pointed at goal B — that is precisely the
+  // GOAL_DRIFT the user gets asked about.
+  //
+  // The binding goes through the real `reconcile` op rather than assigning the two fields:
+  // that keeps ONE mutation path (so the change log, clamping and normalization all apply as
+  // they do everywhere else) and it means the record says `reconcile`, which is what a reader
+  // of the history should see.
+  if (result.delivery !== undefined && result.delivery.goalId === null && deps.ctx !== undefined) {
+    const agent = deps.agent ?? (typeof deps.sessionId === 'string' ? agentForSession(deps.ctx, deps.sessionId) : undefined)
+    const resolved = agent === undefined ? { state: 'unavailable' } : liveGoalFor(deps.ctx, agent)
+    if (resolved.state === 'ok' && resolved.goal !== undefined && resolved.goal !== null) {
+      const reconcile = applyDeliveryOp(result.delivery, 'reconcile', {
+        goalId: resolved.goal.id,
+        goalRevision: resolved.goal.revision,
+        objective: resolved.goal.objective,
+      }, { at, actor: 'system', changeId: nextId('C', result.delivery.changes) })
+      if (reconcile.delivery !== undefined) {
+        // `system` as the actor, not `agent`: nobody asked for this, the harness observed it.
+        // A history that credits the model for a binding it never made would make the change
+        // log lie about who did what.
+        result.delivery = reconcile.delivery
+      }
+    } else if (agent === undefined) {
+      // Say so rather than writing a plan that quietly belongs to nothing. The session is not
+      // loaded in this process, so the goal cannot be read — the plan is still written (it is
+      // the user's data), but the binding stays null and `integrity` will name it.
+      result.delivery.unboundReason = '会话未在本进程加载，暂时无法把计划绑到运行时目标'
+    }
+  }
+
   const written = writeDeliveryOverlay(paths, sessionId, result.delivery, options.expectedRevision ?? read.delivery.revision)
   if (!written.ok) return { ok: false, code: written.code, reason: written.reason }
 
@@ -649,7 +704,7 @@ export function renderPreflight(delivery, goal, meta = {}) {
   lines.push(
     gate.allowed
       ? '完成门：验收标准已全部满足，可以调用 update_goal(action=complete)。'
-      : `完成门：现在还不能标记完成。还差 ${[...gate.unverified, ...gate.remainingWork, ...gate.blockers].slice(0, 5).join('、')}`,
+      : `完成门：现在还不能标记完成。还差 ${[...(gate.structural ?? []), ...gate.unverified, ...gate.remainingWork, ...gate.blockers].slice(0, 5).join('、')}`,
   )
   // One line of instruction, and it points at the tool rather than repeating the rules the
   // system prompt already carries. Repeating policy here would be the token waste §83 is
@@ -808,7 +863,8 @@ export function renderGateRefusal(toolName, entry) {
     '',
     '这不是故障，是启动协议：动手之前先确定要交付什么。**你没有卡住，只需要先做一个选择**：',
     '',
-    '1. **这是长期工作** → 先建目标，再动手。用 `create_goal` 写下：',
+    '1. **这是长期工作** → 先建目标，再动手。这一页的目标中心就是这个会话的目标看板，' +
+      '建目标要用 `create_goal` 写下：',
     '   - 目标、背景与交付结果（要完成什么、为什么做、最终得到什么）',
     '   - **验收标准至少一条**（怎样才算完成——没有它，「完成」无法判断），用 `' +
       DELIVERY_TOOL +

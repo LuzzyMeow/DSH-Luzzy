@@ -230,7 +230,9 @@ export function registerDeliveryTool(ctx, deps) {
         })
       }
       const sessionId = agent.session?.id
-      const result = deps.commit({ paths: deps.paths, sessionId, ctx }, args.action, args.payload ?? {}, { actor: 'agent' })
+      // `agent` is passed so the commit path can bind the plan to the runtime goal without
+      // having to look the session up again (it already holds the live agent right here).
+      const result = deps.commit({ paths: deps.paths, sessionId, ctx, agent }, args.action, args.payload ?? {}, { actor: 'agent' })
       if (!result.ok) {
         // A refused proposal still wrote its proposal record — re-read so the progress and
         // proposal blocks describe the state that is actually on disk.

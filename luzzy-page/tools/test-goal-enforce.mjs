@@ -1600,12 +1600,21 @@ try {
     const objective = `# 目标原文 ${'这一段很长，长到每轮重发就是在烧上下文。'.repeat(80)}`
     const paths = freshPaths()
     const sessionId = 'sess-compact'
+    let goal = { ...GOAL, objective, revision: 1 }
     let delivery = domain.emptyDelivery(sessionId)
     delivery = domain.applyDeliveryOp(delivery, 'setGoalSummary', { goalSummary: '把目标中心做出来。' }, { at: 1 }).delivery
     delivery = domain.applyDeliveryOp(delivery, 'setExpectedOutput', { expectedOutput: '一个能看的目标页。' }, { at: 1 }).delivery
+    // BIND IT. `commitOp` fills these from the live goal on the first plan write, but this
+    // fixture writes the overlay straight to the store and so bypasses that path. Leaving the
+    // binding null no longer means "no opinion" — a plan WITH CONTENT and no binding is now
+    // correctly reported as drift, which added a line to the block and made the size assertion
+    // here fail for a reason that had nothing to do with size. The fixture now states the
+    // precondition the running system would have established.
+    delivery.goalId = goal.id
+    delivery.goalRevision = goal.revision
+    delivery.objectiveMirror = goal.objective
     store.writeDeliveryOverlay(paths, sessionId, delivery, 0)
 
-    let goal = { ...GOAL, objective, revision: 1 }
     const ctx = fakeCtx({ goals: { get: () => goal } }, ['webServer'])
     enforce.resetCounters()
     enforce.installEnforcement(ctx, { paths, options: {} })

@@ -43,13 +43,31 @@ const GOAL = {
   maxGoalRounds: 256,
 }
 
-/** Build an overlay through the real ops, so every case exercises the real mutation path. */
-function build(steps) {
+/**
+ * Build an overlay through the real ops, so every case exercises the real mutation path.
+ *
+ * It ends by BINDING the plan to `GOAL`, because that is now a precondition for a plan with
+ * content rather than an optional courtesy. The binding used to be an op the model had to
+ * remember; a real session ran 205 changes without ever calling it, which silently switched
+ * off both `integrity` step 11 and `detectDrift` — the two guards whose whole job is catching
+ * a plan that has drifted from its goal.
+ *
+ * At the domain level there is no `ctx`, so the auto-bind that `commitOp` performs in the
+ * running system cannot happen here; this fixture stands in for it. The unbound case is
+ * asserted explicitly further down.
+ */
+function build(steps, bind = true) {
   let delivery = domain.emptyDelivery('sess-1')
   for (const [op, payload] of steps) {
     const result = domain.applyDeliveryOp(delivery, op, payload, { at: AT, actor: 'agent' })
     if (result.delivery === undefined) throw new Error(`step ${op} failed: ${result.error}`)
     delivery = result.delivery
+  }
+  if (bind && delivery.changes.length > 0) {
+    // Bound to GOAL's exact identity, the way commitOp fills it from the live goal.
+    delivery.goalId = GOAL.id
+    delivery.goalRevision = GOAL.revision
+    delivery.objectiveMirror = GOAL.objective
   }
   return delivery
 }
@@ -200,7 +218,18 @@ try {
     // T-001 -> T-003 -> T-002 -> T-001 would make the plan unrunnable, but here only the
     // declared edges exist; the check that matters is the in-progress-on-pending one.
     const broken = domain.integrity(looped.delivery, GOAL)
-    check('an in-progress task may not depend on a pending one', broken.errors.some((e) => e.code === domain.ERROR_CODES.INVALID_STATE) || broken.valid)
+    // This assertion used to read `… || broken.valid`, which made it PASS whenever the report
+    // was clean — i.e. it could not fail for the reason it names. It was written that way
+    // because the case above does not actually create an in-progress task depending on a
+    // pending one (T-001 is `ready`, not `in_progress`). So the real case is built explicitly
+    // here instead of being excused by a disjunction.
+    const realCase = structuredClone(looped.delivery)
+    realCase.tasks[0].status = 'in_progress' // T-001, which T-002 and T-003 depend on
+    realCase.tasks[1].status = 'ready' // T-002 depends on T-001
+    const report = domain.integrity(realCase, GOAL)
+    check('an in-progress task may not depend on a pending one',
+      report.errors.some((e) => e.code === domain.ERROR_CODES.INVALID_STATE && /尚未完成/.test(e.detail)),
+      JSON.stringify(report.errors))
   }
   {
     // A cycle, built directly (the ops cannot create one, which is itself the point).
@@ -223,6 +252,49 @@ try {
     check('a plan belonging to another goal is an ERROR, not a warning',
       report2.errors.some((e) => e.code === domain.ERROR_CODES.DRIFT_DETECTED))
     eq('and the whole check fails', report2.valid, false)
+  }
+
+  console.log('goal-domain: an UNBOUND plan is not an exempt plan')
+  {
+    // The real defect, in its real shape. A session ran 205 changes with `goalId === null`
+    // and `reconcile` never called once; the console drew that plan as the projection of the
+    // live goal, and NOTHING had ever checked that it was. Both guards skipped on null.
+    //
+    // These assertions pin the fix: a plan with content and no binding must be reported by
+    // BOTH the integrity check and the drift check. Reverting either null-guard turns them red.
+    const unbound = build([ACCEPTANCE, TASK], false)
+    eq('the fixture really is unbound', unbound.goalId, null)
+    check('the fixture really has content', unbound.acceptance.length > 0 && unbound.changes.length > 0)
+
+    const report = domain.integrity(unbound, GOAL)
+    check('integrity reports an unbound plan as DRIFT, not silence',
+      report.errors.some((e) => e.code === domain.ERROR_CODES.DRIFT_DETECTED && e.target === 'goal'),
+      JSON.stringify(report.errors))
+    eq('and the report is not valid', report.valid, false)
+
+    const drift = domain.detectDrift(unbound, GOAL)
+    check('detectDrift reports an unbound plan too',
+      drift !== null && drift.fields.includes('goal'), JSON.stringify(drift))
+    // Guarded rather than dereferenced directly: when the arm that reverts the fix runs, this
+    // line used to throw on `null.before` and abort the whole suite. A crash mid-file hides
+    // every assertion AFTER it, so a negative control reported "the suite went red" without
+    // ever reaching the assertions it was meant to exercise. A test that dies is not a test
+    // that fails.
+    eq('with no "before" identity, because there was never one', drift?.before?.goal ?? null, null)
+    eq('and the goal it should have been bound to', drift?.after?.goal ?? null, GOAL.id)
+
+    // The original reason for the null guard must survive: a plan nobody has written to has
+    // no opinion. Otherwise every goal would be born in drift, and the label would mean
+    // nothing — which is how the real defect got to hide in the first place.
+    const untouched = domain.emptyDelivery('s')
+    eq('an untouched plan still has no opinion', domain.detectDrift(untouched, GOAL), null)
+    eq('and is still healthy, not alarming', domain.health(untouched, GOAL), 'healthy')
+    check('and integrity is quiet about it',
+      domain.integrity(untouched, GOAL).errors.length === 0,
+      JSON.stringify(domain.integrity(untouched, GOAL).errors))
+
+    // No runtime goal at all: the whole check has no opinion, bound or not.
+    eq('no runtime goal means no drift opinion', domain.detectDrift(unbound, null), null)
   }
 
   console.log('goal-domain: drift')

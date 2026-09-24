@@ -249,6 +249,18 @@ export function emptyDelivery(sessionId) {
     goalId: null,
     goalRevision: null,
     objectiveMirror: null,
+    /**
+     * Why this plan is not bound to a runtime goal, when that could not be established.
+     *
+     * A real field rather than a stray property, because `normalizeDelivery` builds every
+     * overlay from this function — an ad-hoc key set elsewhere is dropped on the next read
+     * WITHOUT an error, so a diagnostic written that way silently disappears (which is how
+     * this one was caught: the assertion reading it back got `undefined`).
+     *
+     * The honest states are: `null` (bound, or never needed a binding) and a sentence saying
+     * the session was not loaded when the write happened.
+     */
+    unboundReason: null,
     scope: { included: [], excluded: [] },
     constraints: [],
     acceptance: [],
@@ -342,6 +354,7 @@ export function normalizeDelivery(raw, sessionId) {
   delivery.goalId = text(raw.goalId, 200) ?? null
   delivery.goalRevision = positiveIntegerOrNull(raw.goalRevision)
   delivery.objectiveMirror = text(raw.objectiveMirror) ?? null
+  delivery.unboundReason = text(raw.unboundReason, 300) ?? null
   delivery.focus = text(raw.focus, MAX_FOCUS_CHARS) ?? ''
   delivery.next = stringList(raw.next, MAX_NEXT_ITEMS)
   delivery.expectedOutput = text(raw.expectedOutput, MAX_EXPECTED_OUTPUT_CHARS) ?? ''
@@ -669,9 +682,32 @@ export function integrity(delivery, runtimeGoal) {
   // the runtime currently reports. A mismatch means the plan was written for a different
   // objective and has not been reconciled.
   if (runtimeGoal !== null && runtimeGoal !== undefined) {
-    if (delivery.goalId !== null && delivery.goalId !== runtimeGoal.id) {
+    // AN UNBOUND PLAN IS NOT AN EXEMPT PLAN.
+    //
+    // This check used to be `if (delivery.goalId !== null && …)`, so a null goalId skipped it
+    // entirely — and `detectDrift` had the identical shape. Found in a real session: 205
+    // changes in, `goalId` still null, `reconcile` never once called, and the session ran for
+    // hours with a plan the console presented as the projection of the live goal while
+    // NOTHING had ever verified that it was. Both guards were off, silently.
+    //
+    // The null guard's original reason was legitimate: a plan exists before any goal does, and
+    // that is not drift. But "nothing written yet" and "a real plan that was never bound" are
+    // different states, and collapsing them is what hid this one.
+    //
+    // So the test is CONTENT, not null-ness: an overlay that has never been written to has no
+    // opinion and stays quiet (a fresh goal is not in trouble — see `health`), while an
+    // overlay carrying real work must be bound to a goal. `changes` is the honest signal for
+    // "somebody has written here": it is empty only in `emptyDelivery`.
+    const hasContent = delivery.changes.length > 0 || delivery.acceptance.length > 0 || delivery.tasks.length > 0
+    if (delivery.goalId === null && hasContent) {
+      fail(
+        ERROR_CODES.DRIFT_DETECTED,
+        'goal',
+        `交付计划还没有绑定到当前目标 ${runtimeGoal.id}：绑定从未发生过，所以漂移检测一直是关着的。用 reconcile 对齐一次。`,
+      )
+    } else if (delivery.goalId !== null && delivery.goalId !== runtimeGoal.id) {
       fail(ERROR_CODES.DRIFT_DETECTED, 'goal', `交付计划属于 ${delivery.goalId}，当前目标是 ${runtimeGoal.id}`)
-    } else if (delivery.goalRevision !== null && delivery.goalRevision !== runtimeGoal.revision) {
+    } else if (delivery.goalId !== null && delivery.goalRevision !== null && delivery.goalRevision !== runtimeGoal.revision) {
       warn(ERROR_CODES.RECONCILIATION_REQUIRED, 'goal', `交付计划基于修订 ${delivery.goalRevision}，当前是 ${runtimeGoal.revision}`)
     }
   }
@@ -705,6 +741,7 @@ export function completionGate(delivery, runtimeGoal) {
   const missingEvidence = []
   const remainingWork = []
   const blockers = []
+  const structural = []
 
   // Acceptance criteria must EXIST before completion can mean anything. Checked here
   // directly rather than inferred from `integrity`, because `integrity` deliberately treats
@@ -716,10 +753,17 @@ export function completionGate(delivery, runtimeGoal) {
 
   const structure = integrity(delivery, runtimeGoal)
   for (const error of structure.errors) {
-    // Anything structurally broken blocks completion, but it is reported under its own
-    // code so the caller can tell "your plan is malformed" from "your plan is unfinished".
+    // Anything structurally broken blocks completion, but it is reported under its own bucket
+    // so the caller can tell "your plan is malformed" from "your plan is unfinished".
+    //
+    // THIS USED TO BE `if (code === MISSING_EVIDENCE) … else … push to the SAME ARRAY` — both
+    // branches identical, so every structural error was filed as a missing-evidence gap. A
+    // plan that was merely unbound therefore reported "Missing Evidence: goal: 交付计划还没有
+    // 绑定…", which is a false statement about the plan and sends the reader looking for
+    // evidence that was never the problem. `test-goal-enforce` caught it as one red assertion
+    // the moment an unbound plan became reportable at all.
     if (error.code === ERROR_CODES.MISSING_EVIDENCE) missingEvidence.push(`${error.target}: ${error.detail}`)
-    else missingEvidence.push(`${error.target}: ${error.detail}`)
+    else structural.push(`${error.code} ${error.target}: ${error.detail}`)
   }
 
   for (const row of delivery.acceptance) {
@@ -738,18 +782,19 @@ export function completionGate(delivery, runtimeGoal) {
     if (blocker.resolvedAt === null) blockers.push(`${blocker.id} ${blocker.code}: ${blocker.message}`)
   }
 
-  const allowed = unverified.length === 0 && missingEvidence.length === 0 && remainingWork.length === 0 && blockers.length === 0
+  const allowed = unverified.length === 0 && missingEvidence.length === 0 && remainingWork.length === 0 && blockers.length === 0 && structural.length === 0
   let code = null
   if (!allowed) {
     // The most specific code wins, so a caller acting on the code does the most useful
-    // thing first: close the blocker, then get evidence, then finish the work.
+    // thing first: close the blocker, then repair the plan, then get evidence, then finish.
     if (blockers.length > 0) code = ERROR_CODES.COMPLETION_REJECTED
+    else if (structural.length > 0) code = ERROR_CODES.INVALID_STATE
     else if (missingEvidence.length > 0) code = ERROR_CODES.MISSING_EVIDENCE
     else if (delivery.acceptance.length === 0) code = ERROR_CODES.MISSING_ACCEPTANCE
     else code = ERROR_CODES.COMPLETION_REJECTED
   }
 
-  return { allowed, code, unverified, missingEvidence, remainingWork, blockers }
+  return { allowed, code, unverified, missingEvidence, remainingWork, blockers, structural }
 }
 
 /**
@@ -761,6 +806,11 @@ export function renderCompletionRefusal(gate) {
   const lines = [`${ERROR_CODES.COMPLETION_REJECTED}: 目标还不能标记为完成。`]
   if (gate.unverified.length > 0) lines.push(`Unverified Criteria:\n${gate.unverified.join(', ')}`)
   if (gate.missingEvidence.length > 0) lines.push(`Missing Evidence:\n${gate.missingEvidence.map((line) => `- ${line}`).join('\n')}`)
+  // Named separately from evidence on purpose: a malformed or unbound plan is not a missing
+  // proof, and telling someone to go find evidence for it sends them the wrong way.
+  if (gate.structural !== undefined && gate.structural.length > 0) {
+    lines.push(`Plan Problem:\n${gate.structural.map((line) => `- ${line}`).join('\n')}`)
+  }
   if (gate.remainingWork.length > 0) lines.push(`Remaining Work:\n${gate.remainingWork.map((line) => `- ${line}`).join('\n')}`)
   if (gate.blockers.length > 0) lines.push(`Open Blockers:\n${gate.blockers.map((line) => `- ${line}`).join('\n')}`)
   lines.push('补齐之后再次调用 update_goal(action=complete)；如果其中某项确实无法满足，用 goal_delivery 记录阻塞或向用户提出变更。')
@@ -786,7 +836,18 @@ export function detectDrift(delivery, runtimeGoal) {
   const before = {}
   const after = {}
 
-  if (delivery.goalId !== null && delivery.goalId !== runtimeGoal.id) {
+  // Same defect as `integrity` step 11, fixed the same way. A null `goalId` used to make this
+  // comparison a no-op — so the ONE function whose entire job is catching drift was disabled
+  // for exactly the plans that had never been bound.
+  //
+  // Same content test as `integrity`: an overlay nobody has written to has no opinion, but an
+  // overlay carrying real work and no binding is reported, because that is the defect.
+  const hasContent = delivery.changes.length > 0 || delivery.acceptance.length > 0 || delivery.tasks.length > 0
+  if (delivery.goalId === null && hasContent) {
+    fields.push('goal')
+    before.goal = null
+    after.goal = runtimeGoal.id
+  } else if (delivery.goalId !== null && delivery.goalId !== runtimeGoal.id) {
     fields.push('goal')
     before.goal = delivery.goalId
     after.goal = runtimeGoal.id
@@ -1437,6 +1498,9 @@ export function applyDeliveryOp(delivery, op, payload, context) {
       next.goalId = goalId ?? next.goalId
       next.goalRevision = revision ?? next.goalRevision
       if (objective !== undefined) next.objectiveMirror = objective
+      // The binding succeeded, so whatever stopped it last time is no longer true. Leaving a
+      // stale sentence here would make the page keep explaining a problem that is gone.
+      next.unboundReason = null
       recordChange(next, at, actor, 'reconcile', `revision ${before} -> ${next.goalRevision}`, changeId)
       next.revision += 1
       next.updatedAt = at
