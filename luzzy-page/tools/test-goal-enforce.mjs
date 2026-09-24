@@ -32,6 +32,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const enforce = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-enforce.mjs')).href)
 const domain = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-domain.mjs')).href)
 const store = await import(pathToFileURL(join(HERE, '..', 'lib', 'goal-store.mjs')).href)
+const rosterMod = await import(pathToFileURL(join(HERE, '..', 'lib', 'skill-roster.mjs')).href)
 
 /**
  * The harness's OWN session validator, so message shape is checked against the real rule
@@ -1689,7 +1690,95 @@ try {
       ]), 'new')
     eq('a non-array is not a crash', enforce.compactionCheckpoint(undefined), null)
   }
-  console.log('goal-enforce: turn observation reports WHICH files changed')
+  console.log('goal-enforce: the skill roster is injected at the node, once, and again after compaction')
+{
+  // 用户的方案：技能清单不再常驻系统提示词，而是在「判断技能清单」这个节点注入正文。所以这
+  // 一节断的是**注入时机** —— 而时机错了只有两种表现，两种都不报错：注入太多次（白烧 token），
+  // 或压缩后不补（模型手上那份没了却不知道）。
+  const paths = freshPaths()
+  const sessionId = 'sess-roster'
+  store.writeDeliveryOverlay(paths, sessionId, domain.emptyDelivery(sessionId), 0)
+  const goal = { ...GOAL, objective: '清单注入用目标', revision: 1 }
+  const ctx = fakeCtx({ goals: { get: () => goal } }, ['webServer'])
+  enforce.resetCounters()
+  const enforcement = enforce.installEnforcement(ctx, { paths, options: {} })
+  // 每一轮都必须带一条 role:'user' 的消息 —— 「新的一轮」判据是**用户消息的 id 变了**
+  // （`turnOwnerId`），而链只在 newTurn 时注入。第一版这里传空数组，于是 chainDue 永远 false，
+  // 15 条断言全红，报出来像「清单没注入」。**量具错了，看着像产品坏了** —— 这个形状本轮第三次。
+  const step = (turn, s, extra = []) => {
+    const mine = { role: 'user', id: 'u-' + turn, content: [{ type: 'text', text: '继续' }] }
+    const messages = [mine, ...extra]
+    return fire(ctx, 'agent/pre-step',
+      { agent: fakeAgent(sessionId), messages, turn, step: s, signal: undefined },
+      () => Promise.resolve({ kind: 'enter', messages }), { kind: 'enter', messages })
+  }
+  const chainOf = (result) => (result.messages ?? [])
+    .map((m) => m?.content?.[0]?.text ?? '')
+    .find((t) => t.startsWith('<state_chain>')) ?? ''
+
+  // 第一轮：节点到了，清单必须跟着注入**正文** —— 不是「有这一节」。
+  const first = chainOf(await step(1, 1))
+  check('the first chain carries the roster body', first.includes('luzzy-roster-backend/SKILL.md'), first.slice(0, 260))
+  check('and it carries the AnySearch usage the roster is read with',
+    first.includes('get_sub_domains') && first.includes('anysearch_cli.py'), '清单没带工具用法')
+  check('and it says this machine has no skill files', first.includes('本机没有 skill 文件'), '没写清新方案的前提')
+  check('and it states the exemption', first.includes('豁免'), '没写豁免规则')
+  check('and it states that compaction voids the exemption',
+    first.includes('compaction checkpoint'), '没写压缩后重读')
+  check('and the roster is bracketed so its end is unambiguous',
+    first.includes('【技能清单到此为止】'))
+  eq('and it is counted as one injection', enforcement.stats().rosterInjected, 1)
+
+  // 第二轮：同一份清单不重复注入。摘要去重的全部意义就在这里。
+  const second = chainOf(await step(2, 1))
+  check('a second turn does NOT re-inject the same roster',
+    second !== '' && !second.includes('luzzy-roster-backend/SKILL.md'), second.slice(0, 240))
+  eq('and it is counted as a skip', enforcement.stats().rosterSkipped, 1)
+  eq('and the injection count did not move', enforcement.stats().rosterInjected, 1)
+
+  // 压缩之后：豁免作废，清单必须回来。判据是新的 compactionId，不是「我觉得忘了」。
+  const cp1 = { role: 'user', id: 'cp-1', content: '（压缩后的历史）', source: { kind: 'plugin', plugin: 'compact', compactionId: 'cp-1' } }
+  const afterCompaction = chainOf(await step(3, 1, [cp1]))
+  check('a compaction brings the roster back', afterCompaction.includes('luzzy-roster-backend/SKILL.md'),
+    afterCompaction.slice(0, 240))
+  eq('and it is counted as a second injection', enforcement.stats().rosterInjected, 2)
+
+  // 闩锁：同一个 checkpoint 会一直留在消息里，不该每轮都重来一次 —— 那等于没做去重。
+  const afterLatch = chainOf(await step(4, 1, [cp1]))
+  check('but the SAME checkpoint does not fire it twice',
+    afterLatch !== '' && !afterLatch.includes('luzzy-roster-backend/SKILL.md'), afterLatch.slice(0, 240))
+
+  // 一个新 checkpoint（第二次压缩）→ 再注入一次。
+  const cp2 = { role: 'user', id: 'cp-2', content: '（又压缩了一次）', source: { kind: 'plugin', plugin: 'compact', compactionId: 'cp-2' } }
+  const afterSecondCompaction = chainOf(await step(5, 1, [cp1, cp2]))
+  check('a NEW checkpoint fires it again', afterSecondCompaction.includes('luzzy-roster-backend/SKILL.md'),
+    afterSecondCompaction.slice(0, 240))
+  eq('so three injections total', enforcement.stats().rosterInjected, 3)
+}
+
+console.log('goal-enforce: the roster module slices the file, and fails soft')
+{
+  // 切片器的两条性质：切对了范围，以及读不到时**不抛**。
+  // 「不抛」是硬要求：清单一读不出来就应该降级成「本轮不注入」，而不是让整个预检挂掉 ——
+  // 状态链还在、门还在，少的只是一张表。
+  eq('extract returns empty when the start marker is missing', rosterMod.extractRoster('no markers here'), '')
+  eq('extract returns empty when the end marker is missing', rosterMod.extractRoster('===BEGIN===\nbody'), '')
+  eq('extract returns empty when they are inverted', rosterMod.extractRoster('===END===\nbody\n===BEGIN==='), '')
+  eq('extract slices between the markers and trims',
+    rosterMod.extractRoster('junk\n===BEGIN===\n  body  \n===END===\nmore junk'), 'body')
+
+  const loaded = rosterMod.readRoster()
+  eq('the real roster file loads', loaded.error, null)
+  check('and it is a real body, not a stub', loaded.text.length > 3000, `${loaded.text.length} chars`)
+  check('and it does NOT contain the markers themselves',
+    !loaded.text.includes('===BEGIN===') && !loaded.text.includes('===END==='),
+    '标记被切进正文了 —— 说明说明段里写了标记字面量，切片器从那里开始切')
+  check('and the digest is stable across reads', rosterMod.readRoster().digest === loaded.digest)
+  check('and it names the repo root readers must fetch from',
+    loaded.text.includes('raw.githubusercontent.com/LuzzyMeow/DSH-Luzzy'))
+}
+
+console.log('goal-enforce: turn observation reports WHICH files changed')
   {
     // `files` exists for one caller: the skill-miss challenge has to show the model the concrete
     // files it changed. The path comes out of the call's own arguments — a JSON STRING on this

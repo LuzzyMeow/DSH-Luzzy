@@ -79,6 +79,7 @@ import { randomUUID } from 'node:crypto'
 
 import { applyDeliveryOp, completionGate, missingGoalFields, needsReconciliation, nextId, renderCompletionRefusal, summarize } from './goal-domain.mjs'
 import { readDeliveryOverlay, writeDeliveryOverlay } from './goal-store.mjs'
+import { readRoster } from './skill-roster.mjs'
 
 /** Attribution for everything this plugin injects. NEVER `{kind:'user'}`. */
 export const PLUGIN_NAME = 'dsh-luzzy-page'
@@ -435,6 +436,15 @@ function counterFor(sessionId) {
        * 里那条记录的 `pending`，那才是持久状态。
        */
       proposalsSurfacedIds: [],
+      /**
+       * 技能清单注入到哪一份了（正文摘要），以及已消费的压缩 checkpoint。
+       *
+       * `lastRosterDigest` 是**去重键**：同一份清单一个会话只注入一次，正文改了就重来。
+       * `rosterCompactionId` 是**作废键**：上下文被压缩意味着模型手上那份清单没了，
+       * 摘要必须清空让它重来 —— 判据是确定性的（出现新的 compactionId），不是「我觉得忘了」。
+       */
+      lastRosterDigest: null,
+      rosterCompactionId: null,
     }
     counters.set(sessionId, entry)
   }
@@ -717,12 +727,22 @@ export function compactionCheckpoint(messages) {
  * block asks for a value rather than for a goal.
  *
  * The skill half is the other half of the same message: 命中 means the skill checklist applies,
- * and then the activation list must not be empty. And the list is deliberately names + sources,
- * NOT the skill bodies: the full text of a skill is exactly the "inject everything every turn"
- * mistake §68 forbids, and a model that needs the detail can go read the source it was given.
+ * and then the activation list must not be empty.
+ *
+ * WHY THE ROSTER IS INJECTED HERE AND NOT IN THE SYSTEM PROMPT
+ *
+ * 原来清单正文（§1.1.6 / §1.1.7 / §1.3 / §1.4 / 附录 A，约 21,000 字）常驻系统提示词，
+ * **每一次请求都付**。用户的要求是：走到「判断技能清单」这个节点时才注入，正文随注入一起来。
+ *
+ * 所以这里注入 `skill-roster.mjs` 读出来的那份正文（6,145 字）。它按**摘要**去重：同一份清单
+ * 在同一个会话里只注入一次，改了才重来 —— 否则一个长回合会把同一张表塞十几次。
+ *
+ * 已经登记过的技能只列名字与来源（`delivery.skills`），正文仍然不重复注入：正文是给
+ * 「还没读过的那一份」用的。
  *
  * @param {object} delivery - normalized overlay.
- * @param {{owed?: boolean, entry?: object}} [meta] - whether an answer is still owed this turn.
+ * @param {{owed?: boolean, entry?: object, roster?: string}} [meta] - whether an answer is still
+ *   owed this turn, and the roster body to inject (absent = do not inject a roster).
  * @returns {string} a `<state_chain>` block.
  */
 export function renderChain(delivery, meta = {}) {
@@ -743,15 +763,28 @@ export function renderChain(delivery, meta = {}) {
     lines.push('（本轮还没答 —— 在工作类工具被放行之前必须先答。这两条没有默认值。）')
   }
 
+  // 清单正文：按摘要去重，只在变了或第一次时注入。
+  const roster = typeof meta.roster === 'string' ? meta.roster : ''
+  if (roster !== '') {
+    lines.push('')
+    lines.push('【技能清单 · 本机不存在 skill 文件，全部在线读。判类目 → 在线读正文 → activateSkill 登记。】')
+    lines.push('')
+    lines.push(roster)
+    lines.push('')
+    lines.push('【技能清单到此为止】')
+  }
+
   if (skills.length > 0) {
     lines.push('')
-    lines.push(`【已激活技能 · ${skills.length} 项】只给名字与来源，正文不注入：`)
+    lines.push(`【已激活技能 · ${skills.length} 项】这些是**已经读过并登记过**的，本轮不必重读（豁免）；正文仍然不重复注入：`)
     for (const row of skills.slice(0, 8)) {
       lines.push(`- ${row.name} —— ${row.purpose}`)
       lines.push(`  来源：${row.source}`)
     }
     if (skills.length > 8) lines.push(`（还有 ${skills.length - 8} 项，见「技能」页）`)
+    // 豁免的两个失效条件都写在这里，因为它们改变的是**这一份列表能不能信**。
     lines.push('一旦对某个技能的用法模糊，**去上面的来源读完整正文**，不要凭印象用。')
+    lines.push('豁免失效的两种情形：① **上下文被压缩过** → 内容必然丢失，命中的 skill 必须**重新在线读一遍并重新登记**；② 来源那份**版本已变** → 以在线为准，重读。')
   }
   lines.push('</state_chain>')
   return lines.join('\n')
@@ -1078,6 +1111,17 @@ export function installEnforcement(ctx, deps) {
   const stats = {
     preflight: 0,
     preflightMiss: 0,
+    /**
+     * 技能清单：注入了几次 / 按摘要跳过了几次 / 读不出来几次。
+     *
+     * 这三个是**模块级**的，不是每会话的（`entry` 那份是 per-session 的）。第一版写错了位置 ——
+     * 加进了 `entry`，于是 `stats.rosterInjected += 1` 在给一个不存在的字段自增，
+     * `stats()` 里读到 `undefined`，而测试报的是「清单没注入」。
+     * 位置错了不会报错，只会让计数永远是 0/undefined。
+     */
+    rosterInjected: 0,
+    rosterSkipped: 0,
+    rosterMiss: 0,
     reconcileOffered: 0,
     reconcileSkipped: 0,
     goalNudged: 0,
@@ -1298,15 +1342,51 @@ export function installEnforcement(ctx, deps) {
         }
       }
 
+      // ---- 技能清单：按摘要去重，压缩后重来 --------------------------------
+      //
+      // 清单正文 6,145 字，只在**这个节点**注入（原来它常驻系统提示词，约 21,000 字、每轮都付）。
+      //
+      // 去重按**摘要**：同一份清单在一个会话里只注入一次，改了才重来 —— 否则一个长回合会把同一张
+      // 表塞十几次，那正是 §83 说的浪费。
+      //
+      // 压缩后摘要要作废：上下文被压缩意味着模型手上那份已经没了，清单必须重来一次。判据是
+      // 确定性的 —— 出现一个新的 compaction checkpoint（同一个 `compactionId` 只消费一次）。
+      let roster = null
+      if (chainDue) {
+        const compactionId = compactionCheckpoint(decision.messages)
+        if (compactionId !== null && compactionId !== entry.rosterCompactionId) {
+          entry.rosterCompactionId = compactionId
+          entry.lastRosterDigest = null
+        }
+        const loaded = readRoster()
+        if (loaded.error === null) {
+          if (loaded.digest !== entry.lastRosterDigest) {
+            roster = loaded.text
+            entry.lastRosterDigest = loaded.digest
+            stats.rosterInjected += 1
+          } else {
+            stats.rosterSkipped += 1
+          }
+        } else {
+          // 读不出来就**不注入**，但要让它可见：少一张表不该安静地发生。
+          //
+          // 这里不调 `report()`：**这个模块从来没有过日志出口**，它把诊断全部放在计数里
+          // （`stats` + `entry`，见文件顶部的计数块）。加一个 import 进来的日志函数，会让
+          // 这个「只计数」的约定出现第一个例外，而例外一旦有了第二个就没人记得住。
+          // 页面的诊断区读 `readCounters()`，`rosterMiss` 在那里看得见。
+          stats.rosterMiss += 1
+        }
+      }
+
       // ---- 合成一条消息，而不是三条 ------------------------------------------
       //
       // 一次一步里插三条 notice，模型读到的是三段互不相干的独白；合成一条，读到的是一次
       // 「这一轮的处境」。顺序也是有意的：链在前（它决定这一轮怎么开工），目标在中，技能在链
-      // 里（`renderChain` 自己带已激活技能的名字与来源），提醒在最后。
+      // 里（`renderChain` 自己带已注册技能的名字与来源），提醒在最后。
       const parts = []
       let summary = '没有目标'
       if (chainDue && delivery !== null) {
-        parts.push(renderChain(delivery, { owed: entry.chainPending }))
+        parts.push(renderChain(delivery, { owed: entry.chainPending, roster: roster }))
         summary = '状态链'
       }
       if (goalDue && delivery !== null) {
